@@ -1,0 +1,145 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{titlesec}
+\usepackage[compress]{natbib}
+\usepackage[resetlabels]{multibib}
+\usepackage{authblk}
+\usepackage{amsmath,amssymb,bm}
+
+\usepackage[table]{xcolor}
+\usepackage{url}            % simple URL typesetting
+\usepackage{float}
+\definecolor{dred}{rgb}{0.6,0,0}
+\definecolor{dpurple}{HTML}{A020F0}
+\definecolor{dblue}{rgb}{0,0,0.6}
+\definecolor{hlcolor}{rgb}{1,1,0.8}
+\usepackage[colorlinks=true, linkcolor=dblue, citecolor=dred, urlcolor=dblue]{hyperref}       % hyperlinks
+
+\usepackage[nameinlink]{cleveref}
+\usepackage[margin=1in]{geometry}
+\renewcommand\b\bm
+\setlength{\parindent}{0pt}
+\setlength{\parskip  }{5.5pt}
+\renewcommand\b\bm
+\creflabelformat{equation}{#2\textup{#1}#3}
+
+\title{Predictive learning of model-based actions}
+
+\author[1]{\normalsize \bfseries Kristopher T.\ Jensen}
+\affil[1]{ \small Sainsbury Wellcome Centre, University College London, London, UK}
+\date{\vspace*{-1.5em}
+\normalsize kris.torp.jensen@gmail.com
+}
+
+
+
+\begin{document}
+
+\maketitle
+
+\subsection*{Task}
+
+We consider the simple task of predicting the binary action of a linear teacher network from a $D$-dimensional input:
+\begin{align}
+    \b{x} &\sim \mathcal{N}(0, \b{I}_D)\\
+    \b{w} &\sim \mathcal{N}(0, \b{I}_D / \sqrt{D})\\
+    y^*(\b{x}) &:= \text{sign}(\b{w}_t^T \b{x}).
+\end{align}
+
+The student is similarly a linearly network with parameters $\b{\theta}$, and it produces a policy through a logistic nonlinearity:
+\begin{align}
+    \pi(y = 1; \b{x}) &= \sigma(\b{\theta}^T \b{x})\\
+    \pi(y=-1; \b{x}) &= 1-\pi(y = 1; \b{x})\\
+    \sigma(z) &= \frac{1}{1 + e^{-z}}.
+\end{align}
+For later convenience, we denote the student pre-activation activity as $z := \b{\theta}^T \b{x}$, such that $\pi(y_t = 1) = \sigma(z_t)$.
+We also remind ourselves that the gradient of the logistic function is given by
+\begin{align}
+    \frac{d \sigma (z)}{dz} &= \frac{e^{-z}}{(1 + e^{-z})^2}\\
+    &= \left ( \frac{1}{1 + e^{-z}} \right ) \left ( \frac{e^{-z}}{1 + e^{-z}} \right ) \\
+    &= \sigma(z) (1 - \sigma(z)).
+\end{align}
+
+A single trial consists of a sequence of $T$ independent `inputs' and corresponding actions.
+Our reward function is a linear combination of (i) reward for each individual action, and (ii) reward for a whole sequence of actions (with mixing parameter $\gamma$):
+\begin{equation}
+    R(y_{1:T} ; y^*_{1:T}) = \frac{\gamma}{T} \sum_t \mathbb{I}(y_t = y^*_t) + (1-\gamma) \prod_t \mathbb{I}(y_t = y^*_t).
+\end{equation}
+
+\subsection*{Supervised learning}
+
+We start by considering the simplest supervised learning setting where we simply maximise the probability of each action being correct independently (this is equivalent to the expected reward when $\gamma = 1$):
+\begin{equation}
+    \mathcal{L}(\theta) := \mathbb{E}_{\b{x}_t \sim p(\b{x}_t)} \left [ \sum_t \pi_t (y = y^*_t) \right ].
+\end{equation}
+We note that
+\begin{align}
+    \nabla_\theta \pi_t (y = -1) &= \nabla_\theta (1 - \pi_t (y = 1))\\
+    &= - \nabla_\theta \pi_t (y = 1).
+\end{align}
+We can therefore write
+\begin{align}
+    \nabla_\theta \pi_t (y = y^*_t) &= y^*_t \nabla_\theta \pi_t(y = 1)\\
+    &= y^*_t \sigma(z_t) (1-\sigma(z_t)) \nabla_\theta (\b{\theta}^T \b{x})\\
+    &= y^*_t \sigma(z_t) (1-\sigma(z_t)) \b{x}.
+\end{align}
+This results in a Monte Carlo gradient estimate of the form
+\begin{align}
+    \nabla_\theta \mathcal{L}(\theta) = \frac{1}{K} \sum_{\b{x} \sim p(\b{x})} \sum_t y^*_t \sigma(z_t) (1-\sigma(z_t)) \b{x},
+\end{align}
+where $K$ is the number of trials used to compute our gradient estimate.
+We can use this expression for simple gradient descent to learn an appropriate policy.
+
+\subsection*{Policy gradient learning}
+
+We start by deriving the form of the policy gradient update to the weights given expected reward
+\begin{equation}
+    J(\theta) := \mathbb{E}_{\b{x}_t \sim p(\b{x}_t); y_t \sim \pi(y_t; \b{x})} \left [ R(y_{1:T} ; y^*_{1:T}(\b{x})) \right ].
+\end{equation}
+Defining $R_t := \sum_{t' \geq t} r_{t'}$, we recall the standard result
+\begin{equation}
+    \nabla_\theta J(\theta) = \sum_t (R_t - B) \nabla_\theta \log \pi_t(y = y_t),
+\end{equation}
+where $B$ is some action-independent baseline.
+In our model,
+\begin{align}
+    \nabla_\theta \log \pi_t(y = 1) &= \nabla_\theta \log \sigma(z_t) \\
+    &= \frac{1}{\sigma(z_t)} \sigma(z_t) (1-\sigma(z_t))\\
+    &=  (1-\sigma(z_t))\\
+    &= 0.5 -\sigma(z_t) + 0.5.
+\end{align}
+\begin{align}
+    \nabla_\theta \log \pi_t(y = -1) &= \nabla_\theta \log (1 - \sigma(z_t))\\
+    &= \frac{-1}{1 - \sigma(z_t)} \sigma(z_t) (1-\sigma(z_t))\\
+    &=  -\sigma(z_t)\\
+    &= 0.5 -\sigma(z_t) - 0.5.
+\end{align}
+Putting these together, we get
+\begin{equation}
+    \nabla_\theta \log \pi_t(y = y_t) = 0.5-\sigma(z_t)+0.5 y_t.
+\end{equation}
+
+\begin{align}
+    \nabla_\theta \pi_t(y = y_t) &= y_t \nabla_\theta \pi_t(y = 1)\\
+    &= y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}.
+\end{align}
+Our Monte Carlo gradients therefore take the simple form
+\begin{equation}
+    \nabla_\theta J(\theta) = \frac{1}{K} \sum_{\b{x}} \sum_t (R_t - B) y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}.
+\end{equation}
+If we set $B = 0.5$ with $\gamma = 1$ and $T = 1$, we see that $2 y (R - B) = 2 y (0.5*y y^* +0.5 - 0.5) = yyy^*=y*$.
+We therefore recover the supervised gradient estimate exactly.
+If instead $T > 1$, we get
+\begin{equation}
+    \nabla_\theta J(\theta) =  (R - B) \sum_t y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}_t.
+\end{equation}
+We can take expectations to get
+\begin{equation}
+    < \nabla_\theta J(\theta) > =  <(R - B)> \sum_t <y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}_t>,
+\end{equation}
+where all cross-terms cancel because the inputs are sampled indepdenently.
+
+
+
+
+\end{document}
