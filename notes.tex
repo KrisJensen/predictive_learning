@@ -5,6 +5,7 @@
 \usepackage[resetlabels]{multibib}
 \usepackage{authblk}
 \usepackage{amsmath,amssymb,bm}
+\usepackage{braket}
 
 \usepackage[table]{xcolor}
 \usepackage{url}            % simple URL typesetting
@@ -18,9 +19,9 @@
 \usepackage[nameinlink]{cleveref}
 \usepackage[margin=1in]{geometry}
 \renewcommand\b\bm
+\newcommand*\sgn[1]{\text{sgn} ({#1})}
 \setlength{\parindent}{0pt}
 \setlength{\parskip  }{5.5pt}
-\renewcommand\b\bm
 \creflabelformat{equation}{#2\textup{#1}#3}
 
 \title{Predictive learning of model-based actions}
@@ -43,7 +44,7 @@ We consider the simple task of predicting the binary action of a linear teacher 
 \begin{align}
     \b{x} &\sim \mathcal{N}(0, \b{I}_D)\\
     \b{w} &\sim \mathcal{N}(0, \b{I}_D / \sqrt{D})\\
-    y^*(\b{x}) &:= \text{sign}(\b{w}_t^T \b{x}).
+    y^*(\b{x}) &:= \text{sgn}(\b{w}_t^T \b{x}).
 \end{align}
 
 The student is similarly a linearly network with parameters $\b{\theta}$, and it produces a policy through a logistic nonlinearity:
@@ -70,7 +71,7 @@ Our reward function is a linear combination of (i) reward for each individual ac
 
 We start by considering the simplest supervised learning setting where we simply maximise the probability of each action being correct independently (this is equivalent to the expected reward when $\gamma = 1$):
 \begin{equation}
-    \mathcal{L}(\theta) := \mathbb{E}_{\b{x}_t \sim p(\b{x}_t)} \left [ \sum_t \pi_t (y = y^*_t) \right ].
+    \mathcal{L}(\theta) := \mathbb{E}_{\b{x}_t \sim p(\b{x}_t)} \left [ T^{-1} \sum_t \pi_t (y = y^*_t) \right ].
 \end{equation}
 We note that
 \begin{align}
@@ -85,10 +86,62 @@ We can therefore write
 \end{align}
 This results in a Monte Carlo gradient estimate of the form
 \begin{align}
-    \nabla_\theta \mathcal{L}(\theta) = \frac{1}{K} \sum_{\b{x} \sim p(\b{x})} \sum_t y^*_t \sigma(z_t) (1-\sigma(z_t)) \b{x},
+    \nabla_\theta \mathcal{L}(\theta) = \frac{1}{K} \sum_{\b{x} \sim p(\b{x})} T^{-1} \sum_t y^*_t \sigma(z_t) (1-\sigma(z_t)) \b{x},
 \end{align}
 where $K$ is the number of trials used to compute our gradient estimate.
 We can use this expression for simple gradient descent to learn an appropriate policy.
+
+
+We first consider how the mean gradient scales with $T$ at initialisation:
+\begin{align}
+    \braket{\nabla_\theta \mathcal{L}(\theta)} &= T^{-1} \sum_t \braket{\nabla_\theta \pi_t (y = y^*_t)}\\
+    &= \braket{\nabla_\theta \pi (y = y^*)}.
+\end{align}
+The mean gradient therefore does not scale with $T$.
+As $N \rightarrow \infty$, the expected gradient for each individual parameter goes to zero (since each input dimension contributes infinitesimally to the response).
+We can compute the second moment of the gradient for action $t$ as $N \rightarrow \infty$:
+\begin{align}
+    \braket{(\nabla_\theta \mathcal{L}(\theta)_{it})^2}_{\b{x}} &= \braket{(y_t^* \sigma (z_t) (1 - \sigma (z_t)) x_{it})^2}_{\b{x}} \\
+    &\approx \braket{(y_t^*)^2 (\sigma (z_t) (1 - \sigma(z_t)))^2 (x_{it})^2}_{\b{x}}\\
+    &= \braket{(\sigma (z_t) (1 - \sigma(z_t)))^2}_z\\
+    &:= s_2^2,
+\end{align}
+where $s_2 \approx 0.212$ is estimated numerically.
+For the total gradient, we simply average over $T$ time points, which gives
+\begin{align}
+    \braket{(\nabla_\theta \mathcal{L}(\theta)_{i})^2}_{\b{x}} &= \braket{\sum_t (T^{-1} y_t^* \sigma (z_t) (1 - \sigma(z_t)) x_{it})^2}_{\b{x}}\\
+    &= T^{-1} \braket{(\nabla_\theta \mathcal{L}(\theta)_{it})^2}_{\b{x}}\\
+    &= T^{-1} s_2^2.
+\end{align}
+The standard deviation of the gradient therefore decays as $s_2 / \sqrt{T}$.
+
+Alternatively, we define our loss as the summed log probabilities:
+\begin{equation}
+    \mathcal{L}(\theta) := \mathbb{E}_{\b{x}_t \sim p(\b{x}_t)} \left [ T^{-1} \sum_t \log \pi_t (y = y^*_t) \right ].
+\end{equation}
+This is the same as the log of the expected reward when $\gamma = 0$, since the sum of the logs is the log of the product, and the product is the probability of getting all actions correct.
+Our Monte Carlo gradients take the simple form
+\begin{equation}
+    \nabla_\theta \mathcal{L}(\theta) = \frac{1}{K} \sum_{\b{x}} T^{-1} \sum_t (0.5-\sigma(z_t)+0.5 y_t^*) \b{x}.
+\end{equation}
+
+The mean gradient is again independent of T:
+\begin{align}
+    \braket{\nabla_\theta \mathcal{L}(\theta)} = T^{-1} \sum_t \braket{\nabla_\theta \log \pi_t (y = y^*_t)}\\
+    &= \braket{\nabla_\theta \log \pi (y = y^*)}.
+\end{align}
+To compute the second moment, we again take $N \rightarrow \infty$ so the response and reward are both decorrelated from a single input dimension.
+We also note that $\braket{\sigma(z_t)} = 0.5$ by symmetry.
+\begin{align}
+    \braket{(\nabla_\theta \mathcal{L}(\theta))^2}_{\b{x}} &= \braket{(0.5-\sigma(z_t)+0.5 y_t)^2}_{\b{x}} \braket{x_{it}^2}_{\b{x}}\\
+    &= \braket{0.25+\sigma(z_t)^2+0.25 (y_t^*)^2 - \sigma(z_t) + 0.5 y_t^* - \sigma(z_t) y_t^*}_{\b{x}} \\
+    &= 0.5 + \braket{\sigma(z_t)^2} - \braket{\sigma(z_t)} - \braket{\sigma(z_t)} \braket{y_t^*}\\
+    &= \braket{\sigma(z_t)^2}\\
+    &= 0.293,
+\end{align}
+where the last expression is evaluated numerically.
+The std of the gradient is therefore $\braket{\sigma(z_t)^2} / \sqrt{T}$.
+
 
 \subsection*{Policy gradient learning}
 
@@ -103,43 +156,346 @@ Defining $R_t := \sum_{t' \geq t} r_{t'}$, we recall the standard result
 where $B$ is some action-independent baseline.
 In our model,
 \begin{align}
-    \nabla_\theta \log \pi_t(y = 1) &= \nabla_\theta \log \sigma(z_t) \\
+    \nabla_z \log \pi_t(y = 1) &= \nabla_z \log \sigma(z_t) \\
     &= \frac{1}{\sigma(z_t)} \sigma(z_t) (1-\sigma(z_t))\\
     &=  (1-\sigma(z_t))\\
     &= 0.5 -\sigma(z_t) + 0.5.
 \end{align}
 \begin{align}
-    \nabla_\theta \log \pi_t(y = -1) &= \nabla_\theta \log (1 - \sigma(z_t))\\
+    \nabla_z \log \pi_t(y = -1) &= \nabla_z \log (1 - \sigma(z_t))\\
     &= \frac{-1}{1 - \sigma(z_t)} \sigma(z_t) (1-\sigma(z_t))\\
     &=  -\sigma(z_t)\\
     &= 0.5 -\sigma(z_t) - 0.5.
 \end{align}
 Putting these together, we get
 \begin{equation}
-    \nabla_\theta \log \pi_t(y = y_t) = 0.5-\sigma(z_t)+0.5 y_t.
+    \nabla_\theta \log \pi_t(y = y_t) = (0.5-\sigma(z_t)+0.5 y_t) \b{x}.
 \end{equation}
-
-\begin{align}
-    \nabla_\theta \pi_t(y = y_t) &= y_t \nabla_\theta \pi_t(y = 1)\\
-    &= y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}.
-\end{align}
 Our Monte Carlo gradients therefore take the simple form
 \begin{equation}
-    \nabla_\theta J(\theta) = \frac{1}{K} \sum_{\b{x}} \sum_t (R_t - B) y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}.
+    \nabla_\theta J(\theta) = \frac{1}{K} \sum_{\b{x}} \sum_t (R_t - B) (0.5-\sigma(z_t)+0.5 y_t) \b{x}.
 \end{equation}
-If we set $B = 0.5$ with $\gamma = 1$ and $T = 1$, we see that $2 y (R - B) = 2 y (0.5*y y^* +0.5 - 0.5) = yyy^*=y*$.
-We therefore recover the supervised gradient estimate exactly.
-If instead $T > 1$, we get
+
+Since this is an unbiased estimate of the gradient of the total expected reward, the mean gradient is the same as the supervised case, which does not depend on $T$.
+We can similarly compute the second moment of this PG estimate.
+We again take $N \rightarrow \infty$ so the response and reward are both decorrelated from a single input dimension.
+We also consider the \emph{initial} gradient, where the response is decorrelated from the reward (since the student and teacher are sampled independently).
+\begin{align}
+    \braket{(\nabla_\theta J(\theta)_{it})^2}_{\b{x}} &= \braket{(R - B)^2}_{\b{x}} \braket{(0.5-\sigma(z_t)+0.5 y_t)^2}_{\b{x}} \braket{x_{it}^2}_{\b{x}}.
+\end{align}
+We trivially have $\braket{x_{it}^2}_{\b{x}} = 1$.
+
+We now deal with the policy term:
+\begin{align}
+    \braket{(0.5-\sigma(z_t)+0.5 y_t)^2}_{\b{x}} &= \braket{0.25+\sigma(z_t)^2+0.25 y_t^2 - \sigma(z_t) + 0.5 y_t - \sigma(z_t) y_t}_{\b{x}} \\
+    &= 0.5 + \braket{\sigma(z_t)^2 - \sigma(z_t) - \sigma(z_t) y_t}_{\b{x}},
+\end{align}
+since $\braket{y_t^2} = 1$, and $\braket{y_t} = 0$ due to random responses.
+At initialisation, $z \sim \mathcal{N}(0, 1)$ and
 \begin{equation}
-    \nabla_\theta J(\theta) =  (R - B) \sum_t y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}_t.
+    \braket{\sigma(z_t)}_{\b{x}} = \braket{\sigma(z_t)}_{\mathcal{N}(0, 1)} = 0.5.
 \end{equation}
-We can take expectations to get
+This is true because $\sigma(z)$ is antisymmetric around 0.5 for positive and negative $z$.
+Numerically,
+\begin{align}
+    \braket{\sigma(z_t)^2}_z = 0.293.
+\end{align}
+Numerically,
+\begin{align}
+    \braket{\sigma(z_t) y_t}_z = 0.0865.
+\end{align}
+Together,
+\begin{align}
+    \braket{(0.5-\sigma(z_t)+0.5 y_t)^2}_{\b{x}} = 0.207.
+\end{align}
+
+For $\gamma = 1$ and success probability $p$, $R \sim Binom(T, p)$.
+In this case
+\begin{align}
+    \braket{(R - B)^2}_{\b{x}} &= \braket{R^2}_R + \braket{B^2} - 2 \braket{RB} \\
+    &= Tp(1-p) + T^2p^2 + B^2 - 2BTp.
+\end{align}
+Setting the derivative w.r.t. $B$ to zero, we see that $B = Tp$ -- the expected reward.
+Simplifying by setting $p = \frac12$ and using this optimal $B$, we get:
+\begin{align}
+    \braket{(R - B)^2}_{\b{x}} &= \frac{T}{4} + \frac{T^2}{4} + \frac{T^2}{4} - \frac{2T^2}{4}\\
+    &= \frac{T}{4}.
+\end{align}
+
+Putting it all together, we get:
 \begin{equation}
-    < \nabla_\theta J(\theta) > =  <(R - B)> \sum_t <y_t \pi_t(y = 1) (1-\pi_t(y = 1)) \b{x}_t>,
+    \braket{(\nabla_\theta J(\theta)_{it})^2}_{\b{x}} = 0.207 \frac{T}{4}.
 \end{equation}
-where all cross-terms cancel because the inputs are sampled indepdenently.
+For the total gradient, we simply average over $T$ time points, which gives
+\begin{align}
+    \braket{(\nabla_\theta J(\theta)_{i})^2}_{\b{x}} &= T^{-1} \braket{(\nabla_\theta J(\theta)_{it})^2}_{\b{x}}\\
+    &= \frac{0.207}{4}.
+\end{align}
+In this case, the standard deviation is \emph{constant} in $T$.
 
 
+Now consider the $\gamma = 0$ case where reward is only given if the whole sequence is correct.
+In this case, $R \sim Binom(1, 2^{-T})$
+\begin{align}
+    \braket{(R - B)^2}_{\b{x}} &= 2^{-T} + B^2 - 2B2^{-T}.
+\end{align}
+Setting the derivative equal to zero, we get $B = 2^{-T}$ and 
+\begin{align}
+    \braket{(R - B)^2}_{\b{x}} &= 2^{-T} + 2^{-2T} - 2 2^{-2T}\\
+    &= 2^{-T} - 2^{-2T}.
+\end{align}
+This gives
+\begin{equation}
+    \braket{(\nabla_\theta J(\theta)_{it})^2}_{\b{x}} = 0.207 (2^{-T} - 2^{-2T}).
+\end{equation}
+For the total gradient, we simply average over $T$ time points, which gives
+\begin{align}
+    \braket{(\nabla_\theta J(\theta)_{i})^2}_{\b{x}} &= T^{-1} \braket{(\nabla_\theta J(\theta)_{it})^2}_{\b{x}}\\
+    &= 0.207 T^{-1} (2^{-T} - 2^{-2T}).
+\end{align}
+However, the mean gradient also depends on $T$.
+In particular,
+\begin{align}
+    \braket{\nabla_\theta J(\theta)_{i}} &= \braket{\nabla_\theta \frac{1}{T} \prod_t \pi(y_t = y_t^*)}\\
+    &= \frac{1}{T} \braket{\sum_t \nabla_\theta \pi(y_t = y_t^*) \prod_{t' \neq t} \pi(y_{t'} = y_{t'}^*)}\\
+    &= \frac{1}{T} \sum_t \braket{\nabla_\theta \pi(y_t = y_t^*)} \prod_{t' \neq t} \braket{\pi(y_{t'} = y_{t'}^*)}\\
+    &= \frac{1}{T} \sum_t 2^{-T+1} \braket{\nabla_\theta \pi(y_t = y_t^*)}\\
+    &= \frac{1}{2^{T-1}} \braket{\nabla_\theta \pi(y_t = y_t^*)}.
+\end{align}
+The \emph{signal} therefore scales as $2^{T-1}$, and the noise-to-signal scales as
+\begin{align}
+    0.207 T^{-1} (2^{-T} - 2^{-2T}) \times (2^{T-1})^2 &= 0.207 \frac{(2^{T-2} - 2^{-2})}{T}\\
+    &= 0.207\frac{2^{T-1}}{4T}.
+\end{align}
 
+\newpage
+
+\subsection*{Self-supervised learning}
+
+Here we will consider the learning dynamics when doing supervised learning on training targets specified by an internal `planner' that takes the form of a simple sequence sampler and evaluator.
+
+We start with a few definitions.
+We denote the pre-activations $z = \b{w}^T \b{x}$ and $z^* = {\b{w}^*}^T \b{x}$.
+Our pre-activations are jointly Gaussian with
+\begin{align}
+    \sigma_{|*}^2. := \braket{z z^*} &= \braket{\b{w}^T \b{x} \b{x}^T \b{w}^*} \\
+    &= \b{w}^T \braket{\b{x} \b{x}^T } \b{w}^*\\
+    &= \b{w}^T \b{w}^*\\
+    \sigma_{||}^2 := \braket{z z} &= \b{w}^T \b{w} .\\
+    \sigma_{**}^2 := \braket{z^* z^*} &= {\b{w}^*}^T \b{w}^*.
+\end{align}
+The correlation between $z$ and $z^*$ is given by $\rho_{|*} := \frac{\sigma_{|*}^2}{\sigma_{**} \sigma_{||}}$.
+
+The true action is $y^* = \text{sgn} (z^*)$, and our policy is given by $\pi(y = +1) = \sigma (z)$.
+We will learn from a target action $\hat{y}$ with the following loss function:
+\begin{equation}
+    \mathcal{L}(\b{w}) := \mathbb{E}_{ \{ \b{x}_t \sim p(\b{x}_t) \} } \left [ T^{-1} \sum_t \log \pi_t (y_t = \hat{y}_t) \right ].
+\end{equation}
+We note that $\nabla_z \sigma (z) = \sigma (z) (1 - \sigma (z))$ and
+Additionally,
+\begin{align}
+    \nabla_z \log \pi(y = 1) &= \nabla_z \log \sigma(z)\\
+    &= (1 - \sigma (z))\\
+    \nabla_z \log \pi (y = -1) &= \nabla_z \log (1 - \sigma(z))\\
+    &= - \sigma (z)\\
+    \nabla_z \log \pi (y = \hat{y}) = 0.5 + 0.5 \hat{y} - \sigma(z).
+\end{align}
+Our gradient steps take the form
+\begin{align}
+    \nabla_{\b{w}} \mathcal{L}(\b{w}) &= T^{-1} \sum_t \nabla_{\b{w}} \log \pi_t (y_t = \hat{y}_t) \\
+    &= T^{-1} \sum_t (0.5-\sigma(z_t)+0.5 \hat{y}_t) \b{x}_t.
+\end{align}
+For simplicity, we will approximate $\sigma(z) \approx \theta(z)$, where $\theta(z) = [z > 0]$ is the Heaviside step function.
+
+Since all inputs and therefore actions are independent, we just consider the expected weight update when learning from a single action and average over $T$ of them at the end to recover learning from a sequence.
+We start by computing the expected weight update when doing supervised learning on a \emph{correct} action, $\hat{y} = y^* = \text{sgn}(z^*) = 2 \theta(z^*) - 1$.
+In this case
+\begin{align}
+    \braket{\Delta \b{w} | \hat{y}=y^*} &= \braket{(0.5 - \theta(z) + 0.5 y^*) \b{x}}\\
+    &= 0.5\braket{\b{x}} - \braket{\theta (z) \b{x}} + 0.5 \braket{\text{sgn}(z^*) \b{x}}\\
+    &= - \braket{\theta (z) \b{x}} + \braket{\theta(z^*) \b{x}}\\
+    &\approx \beta \frac{\b{w}^*}{\sigma_{**}} - \beta \frac{\b{w}}{\sigma_{||}}.
+\end{align}
+The last line follows from the fact that $\braket{\theta (\b{v}^T \b{x}) \b{x} } = \beta \hat{\b{v}}$ with $\beta = \frac{1}{2} \braket{ \hat{\b{v}}^T \b{x} | \b{v}^T \b{x} > 0 } = \frac{1}{2} \braket{\text{abs}(z)}_{z \sim \mathcal{N}(0, 1)} = \sqrt{\frac{1}{2 \pi}}$.
+Importantly, this assumes that $p(\b{x} | \hat{y}=y^*) = \mathcal{N}(0, \b{I}_N)$.
+For now, we will assume that samples are generated from a different set of parameters for every sample, $\hat{y}_i = \theta ( { \hat{\b{w}}_i }^T \b{x} )$, in which case this is true after marginalising over $\hat{\b{w}}_i$.
+%
+%From geometric arguments, we note that 
+% This yields
+% \begin{align}
+%     \braket{\Delta \b{w} |  \hat{y}=y^*} &= - \frac{\beta}{2}  \b{w} + \frac{\beta}{2} \b{w}^*\\
+%     &= \frac{\beta}{2} (\b{w}^* - \b{w}).
+% \end{align}
+When learning from an \emph{incorrect} action, the sign changes for the final term and we get
+\begin{align}
+    \braket{\Delta \b{w} | \hat{y} \neq y^*} &= 0.5\braket{\b{x}} - \braket{\theta (z) \b{x}} - 0.5 \braket{\text{sgn}(z^*) \b{x}}\\
+    &= - \braket{\theta (z) \b{x}} - \braket{\theta(z^*) \b{x}} + \braket{\b{x}}\\
+    &\approx -\beta \frac{\b{w}^*}{\sigma_{**}} - \beta \frac{\b{w}}{\sigma_{||}}.
+\end{align}
+Given a probability $p_c$ of a target action being correct, we therefore have
+\begin{align}
+    \braket{\Delta \b{w}} &= \beta [ p_c (\frac{\b{w}^*}{\sigma_{**}} - \frac{\b{w}}{\sigma_{||}} ) + (1-p_c) (- \frac{\b{w}^*}{\sigma_{**}} - \frac{\b{w}}{\sigma_{||}}) ]\\
+    &= \beta[ (2 p_c - 1) \frac{\b{w}^*}{\sigma_{**}} - \frac{\b{w}}{\sigma_{||}} ]
+\end{align}
+%
+The overlap with the goal vector is
+\begin{align}
+    \braket{ (\Delta \b{w})^T \b{w}^*} &= \beta \left [  (2 p_c - 1) \sigma_{**}^{-1} {\b{w}^*}^T \b{w}^* - \sigma_{||}^{-1} \b{w}^T \b{w}^* \right ] \\ 
+     &= \beta \left [  (2 p_c - 1) \sigma_{**} - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ].
+\end{align}
+The overlap with the student vector is
+\begin{align}
+    \braket{ (\Delta \b{w})^T \b{w}} &= \beta \left [  (2 p_c - 1) \sigma_{**}^{-1} \b{w}^T \b{w}^* - \sigma_{||}^{-1} \b{w}^T \b{w} \right ] \\ 
+     &= \beta \left [  (2 p_c - 1) \frac{\sigma_{|*}^2}{\sigma_{**}} - \sigma_{||} \right ].
+\end{align}
+The overlap with the difference is
+\begin{align}
+    \braket{ (\b{w}^* - \b{w})^T (\Delta \b{w})} &= \beta \left [  (2 p_c - 1) \sigma_{**} + \sigma_{||} - \frac{\sigma_{|*}^2}{\sigma_{||}} - (2 p_c - 1) \frac{\sigma_{|*}^2}{\sigma_{**}} \right ].
+\end{align}
+
+We now compute the expected change in the different $\sigma$s when updating $\b{w} \leftarrow \b{w} + \eta \Delta \b{w}$.
+\begin{align}
+    \braket{\Delta \sigma_{**}^2} &= \braket{\Delta ({\b{w}^*}^T \b{w}^*)}\\
+    &= 0,
+\end{align}
+since $\b{w}^*$ is fixed.
+\begin{align}
+    \braket{\Delta \sigma_{|*}^2} &= \braket{\Delta (\b{w}^T \b{w}^*)}\\
+    &= \braket{(\b{w} + \eta \Delta \b{w})^T \b{w}^* - \b{w}^T \b{w}^*}\\
+    &= \eta \braket{(\Delta \b{w})^T \b{w}^*}\\
+    &= \eta \beta \left [  (2 p_c - 1) \sigma_{**} - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ].
+\end{align}
+\begin{align}
+    \braket{\Delta \sigma_{||}^2} &= \braket{\Delta (\b{w}^T \b{w})}\\
+    &= \braket{(\b{w} + \eta \Delta \b{w})^T (\b{w} + \eta \Delta \b{w}) - \b{w}^T \b{w}}\\
+    &= \braket{2 \eta (\Delta \b{w})^T \b{w} + \eta^2 (\Delta \b{w})^T (\Delta \b{w})}\\
+    &\approx 2 \eta \braket{(\Delta \b{w})^T \b{w}}\\
+    &= 2 \eta \beta \left [  (2 p_c - 1) \frac{\sigma_{|*}^2}{\sigma_{**}} - \sigma_{||} \right ].
+\end{align}
+to first order in the learning rate $\eta$.
+
+Now we need to compute $p_c$.
+We will first assume that every simulated action is sampled independently, and that it is correct with probability $p_g$.
+Let's first consider the marginal probability of an action being correct given that we have not sampled an entirely correct sequence.
+In this case,
+\begin{align}
+    p_0^* := p(y_t = y^* | \text{not all correct}) &= \frac{p(\text{not all correct}| y_t = y^*) p(y_t = y^*)}{p(\text{not all correct})}\\
+    &= \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}
+\end{align}
+Now let's consider the case where we sample $M$ sequences independently.
+The probability that at least one sequence is entirely correct is
+\begin{equation}
+    p_R := p(y_t = y_t^* \forall_t) = 1 - (1 - p_g^T)^M.
+\end{equation}
+In this case, all of the individual actions are correct.
+The probability that none are correct is $(1 - p_g^T)^M$.
+In this case, each individual action is correct with the probability indicated above.
+We therefore get
+\begin{equation}
+    p_c = 1 - (1 - p_g^T)^M + (1 - p_g^T)^M \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}.
+\end{equation}
+
+
+Let's now consider the probability that an action is correct, $p_g$, as a function of the sampler-teacher overlap $\rho_{\hat{ } *}$.
+We let $\rho_{\hat{ } *} = \rho_{|*} := \frac{\sigma_{|*}^2}{\sigma_{**} \sigma_{||}}$, so the sampler is \emph{as good as} the student, but uncorrelated from it.
+For a zero-mean bivariate Gaussian distribution, the orthant formula tells us that
+\begin{equation}
+    p(\hat{z} >0, z^* > 0) = \frac{1}{4} + \frac{\text{arcsin}(\rho)}{2 \pi}.
+\end{equation}
+This means the probability of the sampler being correct is
+\begin{align}
+    p_g(\rho) &= p(\theta(z) = \theta(z^*))\\
+    &= p(z >0, z^* > 0) + p(z < 0, z^* < 0)\\
+    &= p(z >0, z^* > 0) + p(z >0, z^* > 0)\\
+    &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}.
+\end{align}
+Importantly, this is independent of any scaling of the weight vectors and depends only on their correlation.
+The probability of \emph{producing} an entirely correct sequence
+
+We can now write down the full set of learning dynamics with $\sigma_{**} = 1$:
+\begin{align}
+    \rho_{|*} &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
+    p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}\\
+    p_R &= 1 - (1 - p_g^T)^M\\
+    p_c &= p_R + (1-p_R) \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}\\
+    \Delta \sigma_{|*}^2 &= \eta \beta \left [  (2 p_c - 1) - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
+    \Delta \sigma_{||}^2 &= 2 \eta \beta \left [  (2 p_c - 1) \sigma_{|*}^2 - \sigma_{||} \right ].
+\end{align}
+
+\subsubsection*{Supervised learning}
+
+We recover supervised learning simply by letting $N \rightarrow \infty$ so $p_c \rightarrow 1$.
+In this case, we have
+\begin{align}
+    p_R &= p_g^T\\
+    \Delta \sigma_{|*}^2 &= \eta \beta \left [  1 - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
+    \Delta \sigma_{||}^2 &= 2 \eta \beta \left [  \sigma_{|*}^2 - \sigma_{||} \right ].
+\end{align}
+The first line comes from noting that the supervised learner only gets to produce one sequence in a trial, and every element has to be correct for the sequence to be correct.
+
+\subsubsection*{Reinforcement learning}
+
+Our reinforcement learning update takes the form
+\begin{equation}
+    \nabla_{\b{w}} \mathcal{L}(\b{w}) = \mathbb{E}_{ \{ \b{x}_t \sim p(\b{x}_t) \} } \left [ T^{-1} \sum_t (R - B) \nabla_{\b{w}} \log \pi_t (y = y_t) \right ],
+\end{equation}
+where $B$ is a baseline.
+The variance of the parameter update is minimised when the baseline is the expected reward, $B = p_R$, and we will use this for simplicity.
+As in the supervised case, the probability of producing a correct sequence is simply
+\begin{equation}
+    p_R = p_g^T.
+\end{equation}
+A single gradient step thus takes the form
+\begin{align}
+    \Delta \b{w} &= (R - p_R) (0.5-\theta(z)+0.5 y) \b{x},
+\end{align}
+where we have again set $\sigma(z) \approx \theta(z)$.
+
+We will consider three different cases;
+\begin{align}
+    \Delta \b{w} | R = 1, y = y^* \ &= (1 - p_R) (0.5-\theta(z)+0.5 y^*) \b{x},\\
+    \Delta \b{w} | R = 0, y = y^* \ &= - p_R (0.5-\theta(z)+0.5 y^*) \b{x},\\
+    \Delta \b{w} | R = 0, y \neq y^* \ &= - p_R (0.5-\theta(z) - 0.5 y^*) \b{x}.
+\end{align}
+These happen with probabilities
+\begin{align}
+    p(R=1, y = y^*) &= p_R \\
+    p(R = 0, y = y^*) &= (1-p_R) p_0^*\\
+    p(R = 0, y \neq y^*) &= (1-p_R) (1 - p_0^*),
+\end{align}
+where $p_0^* = p(y_t = y^* | \text{not all correct}) = \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}$ as before.
+This allows us to write down the expected weight update
+\begin{align}
+    \braket{\Delta \b{w}} &= \braket{ ( p_R (0.5-\theta(z)) - p_R (0.5 - \theta (z))) \b{x}} \\
+    &+ \braket{0.5 y^* (p_R(1-p_R) + (1-p_R)p_0^* (-p_R) + (1-p_R)(1-p_0^*)(-p_R)(-1)) \b{x} }\\
+    &= \beta \sigma_{**}^{-1} \b{w}^* (p_R-p_R^2 - p_0^*p_R + p_R^2 p_0^* + p_R + p_R^2 p_0^* - p_R^2 - p_R p_0^*)\\
+    &= \beta \sigma_{**}^{-1} \b{w}^* (2 p_R - 2 p_R^2 - 2 p_R p_0^* + 2 p_R^2 p_0)\\
+    &= 2 \beta p_R \sigma_{**}^{-1} \b{w}^* (1 + p_R p_0^* - p_R - p_0^*).
+\end{align}
+the first line comes from noting that (i) the probabilities of the three options sum to 1, and they each have a term of the form $-p_R (0.5 - \theta (z))$; and (ii) the first case contributes an update $(0.5 - \theta (z))$ with probability $p_R$.
+
+The overlap with the student and target vectors are:
+\begin{align}
+    \braket{ (\Delta \b{w})^T \b{w}^*} &= 2 \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \sigma_{**},\\
+    \braket{ (\Delta \b{w})^T \b{w}} &= 2 \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \frac{\sigma_{|*}^2}{\sigma_{**}}.
+\end{align}
+The full learning dynamics with $\sigma_{**} = 1$ are:
+\begin{align}
+    \rho_{|*} &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
+    p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}\\
+    p_R &= p_g^T \\
+    p_0^* &= \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}\\
+    \Delta \sigma_{|*}^2 &= 2 \eta \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \\
+    \Delta \sigma_{||}^2 &= 4 \eta \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \sigma_{|*}^2.
+\end{align}
+
+
+If we set the baseline to zero instead, we would have
+\begin{align}
+    p_R &= p_g^T\\
+    \braket{\Delta w} &= \beta p_R (\sigma_{**} \b{w}^* - \sigma_{||} \b{w}) \\
+    \Delta \sigma_{|*}^2 &= \eta \beta p_R \left [  1 - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
+    \Delta \sigma_{||}^2 &= 2 \eta \beta p_R \left [  \sigma_{|*}^2 - \sigma_{||} \right ].
+\end{align}
 
 \end{document}
