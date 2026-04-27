@@ -524,8 +524,7 @@ plot_by_T(np.array(data))
 
 
 #%% plot drho vs rho
-T = 5
-eta = 1e-5
+T = 10
 Ms = [2,4,10,20]
 rhos = np.linspace(0.0, 1.0, 101)
 all_rhos = []
@@ -533,30 +532,22 @@ approx = True
 for rho in rhos:
     sig_st2 = rho
     pg = calc_pg(rho)
-
     pR = calc_p_good_seq(pg, 1, T)# probability of sampling a correct sequence in one try
-    #sup_rho = (sig_st2 + eta*( beta - beta*sig_st2 )) / np.sqrt(1 + 2*eta*( beta*sig_st2 - beta ))
-    #sup_rho = ( beta - beta*rho ) - rho*( beta*rho - beta )
+
     sup_rho = beta*( 1 - rho**2  )
 
     angle = np.arccos(rho) # angle between vectors
     kappa = np.sqrt(pi) * np.sin((pi - angle)/2) / ((pi-angle)*np.sqrt(1+rho))
     dw1 = 0.5*pR*kappa - beta*pR
     dw2 = 0.5*pR*kappa - 0.25*pR*np.sqrt(1-rho**2)/(pi-angle)
-    #RL_rho = (sig_st2 + eta*( sig_st2*dw1 + dw2 )) / np.sqrt(1+2*eta*( dw1 + sig_st2*dw2))
-    #RL_rho = ( rho*dw1 + dw2 ) - rho*( dw1 + rho*dw2)
     RL_rho = dw2 *(1 - rho**2 )
 
     M_rhos = []
     for M in Ms:
         pc = calc_pc(pg, M, T) # probability of training on a good action
-        #M_rhos.append((sig_st2 + eta*( beta*(2*pc - 1) - beta*sig_st2)) / np.sqrt(1 + 2*eta*( beta*(2*pc - 1)*sig_st2 - beta)))
-        #M_rhos.append((beta*(2*pc - 1) - beta*rho) - rho*( beta*(2*pc - 1)*rho - beta))
         M_rhos.append(beta * (2*pc-1)*(1  - rho**2))
 
-
     all_rhos.append(np.array([sup_rho, RL_rho]+M_rhos))
-    #all_rhos.append((np.array([sup_rho, RL_rho]+M_rhos) - rho)/eta)
     
 
 all_rhos = np.array(all_rhos).T
@@ -571,7 +562,8 @@ for log in [False, True]:
     plt.xlabel("rho")
     plt.ylabel("drho")
     plt.xlim(0, 0.1)
-    plt.ylim(0.0075, 0.0095)
+    #plt.ylim(0.0075, 0.0095)
+    plt.ylim(0,0.04)
     plt.show()
 
 

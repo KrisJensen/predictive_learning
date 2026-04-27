@@ -146,8 +146,8 @@ Alternatively, we could have linearised $\theta (z)$ (see below).
 Since all inputs and therefore actions are independent, we just consider the expected weight update when learning from a single action sampled from a sequence of $T$ action.
 Given a probability $p_c$ of a target action being correct, we can write down the expected weight update
 \begin{align}
-    \braket{\Delta \b{w}} &= \braket{(0.5-\sigma(z)+0.5 \tilde{y}) \b{x}} \\
-    &= 0.5 \braket{\tilde{y} \b{x}} - \braket{\sigma(z) \b{x}}\\
+    \braket{\Delta \b{w}} &= \braket{(0.5-\theta(z)+0.5 \tilde{y}) \b{x}} \\
+    &= 0.5 \braket{\tilde{y} \b{x}} - \braket{\theta(z) \b{x}}\\
     &= 0.5 p_c \braket{y^* \b{x} | \tilde{y} = y^*} + 0.5 (1-p_c) \braket{ - y^* \b{x} | \tilde{y} \neq y^*} - \beta \hat{\b{w}}\\
     &\approx 0.5 p_c \braket{y^* \b{x}} + 0.5 (p_c-1) \braket{ y^* \b{x}} - \beta \hat{\b{w}}\\
     &= (2 p_c - 1) \beta \hat{\b{w}}^* - \beta \hat{\b{w}}.
@@ -288,7 +288,68 @@ We can also compute the change in correlation as a function of the current corre
     &\approx \dot{\sigma_{|*}} - 0.5 \dot{\sigma_{||}},
 \end{align}
 to first order in $\eta$.
+We can then write
+\begin{align}
+    \dot{\rho}_\text{sup} &= \beta ( 1 - \rho^2  )\\
+    \dot{\rho}_\text{pred} &= \beta (2p_c-1)(1  - \rho^2)\\
+    \dot{\rho}_\text{RL} &= \left ( 0.5 p_g^T \kappa - 0.25 p_g^T \frac{\sqrt{1-\rho^2}}{\pi- \theta} \right ) (1 - \rho^2 ).
+\end{align}
 
+It is reasonably straightforward to both (i) linearise these expressions, and (ii) calculate their maximum.
+If we linearise, we get an exponential curve that explains early learning.
+
+
+\subsubsection*{Gradient signal and noise}
+
+Now let's compute the variance of our gradient estimators.
+We will assume that $N \rightarrow \infty$, so $x_{it}$ is uncorrelated from $z$ and $y$, which neglects terms in $N^{-1}$.
+
+\begin{align}
+    \braket{\Delta w_i^2}_{x} &= \braket{((0.5 - \theta (z) + 0.5 \tilde{y})x_i)^2}\\
+    &= 0.25 \braket{(\tilde{y} - y)x_{i}^2}\\
+    &\approx 0.25 (\braket{\tilde{y}^2} + \braket{y^2} - 2 \braket{\tilde{y} y})\\
+    &= 0.5 - 0.5 (p_c p_g + (1-p_c)(1-p_g) - p_g(1-p_c) - p_c(1-p_g))\\
+    &= 0.5 - 0.5 (2 p_g - 1) (2 p_c - 1).
+\end{align}
+This holds for \emph{all} elements of the weight vector.
+In the supervised learning case $p_c = 1.0$ and this reduces to $1 - p_g$.
+At initialisation, $p_g = 0.5$ and we are left with $0.5$.
+Importantly, the only effect of $T$ in the predictive learning case is to reduce the magnitude of the second term since $p_c \rightarrow 0.5$.
+However, the second moment is still capped at 0.5.
+The expected square of the mean updates is
+\begin{align}
+    \braket{\braket{\Delta w_i}_x^2}_i &= \braket{((2 p_c - 1) \beta \hat{w}^*_i - \beta \hat{w}_i)^2}_i\\
+    &= N^(-1) \beta^2 ( 1 + (2p_c-1)^2 - 2 (2 p_c - 1) \rho ).
+\end{align}
+The $N^{-1}$ term arises because each element of our student and teacher scales with $N^{-\frac12}$ to ensure normalisation.
+The scaled noise-to-signal ratio is
+\begin{align}
+    \gamma = N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
+    &\approx \frac{0.5 - 0.5 (2 p_g - 1) (2 p_c - 1)}{\beta^2 ( 1 + (2p_c-1)^2 - 2 (2 p_c - 1) \rho )}.
+\end{align}
+Notably, this is approximately constant in $T$.
+
+In the RL case
+\begin{align}
+    \braket{\Delta w_i} &= \braket{((R-B)( 0.5 y - 0.25 \hat{z}) x_i)^2}\\
+    &\approx \braket{(R-B)^2} (\frac{1}{4} \braket{y^2} + \frac{1}{16} \braket{\hat{z}^2} - \frac{1}{4} \braket{\text{sgn}(\hat{z} \hat{z})})\\
+    &= (p_R + B^2 - 2Bp_R)(\frac{5}{16} + \frac{1}{2}\beta)\\
+    &\geq 0.11 p_R(1-p_R).
+\end{align}
+Conversely, 
+\begin{align}
+    \braket{\braket{\Delta w_i}_x^2}_i &= \braket{ \left ( \hat{\b{w}}_i \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \hat{\b{w}^*}_i \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right ) \right )^2 }\\
+    &= \left ( 0.5 p_R \kappa - \beta p_R \right )^2 + \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 p_R \kappa - \beta p_R \right ) \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )\\
+    &= p_R^2 \left [ \left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right ) \right ].
+\end{align}
+Now the scaled signal-to-noise ratio is
+The scaled noise-to-signal ratio is
+\begin{align}
+    \gamma = N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
+    &\approx p_R^{-1} \frac{0.11 (1-p_R)}{\left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )}.
+\end{align}
+Notably, this scales as $p_R = p_g^T$!
+We therefore see that both supervised and predictive learning have a constant signal-to-noise ratio, while RL is exponentially bad.
 
 \newpage
 
