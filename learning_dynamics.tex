@@ -38,6 +38,13 @@
 
 \maketitle
 
+\subsubsection*{Outstanding questions}
+
+Can we look at the signal and noise of the change in correlation instead of the the change in weights?
+I think this is basically just the projection of the weight change onto the teacher.
+
+Can we relax some of the assumptions about the planning process?
+
 \subsection*{Task}
 
 We consider the simple task of predicting the binary action of a linear teacher network from a $N$-dimensional input:
@@ -203,8 +210,9 @@ The probability that no sampled sequences are entirely correct is $(1 - p_g^T)^M
 In this case a random sequence sampled from the set of `not entirely correct' sequences is used as a target.
 The marginal probability of an action being correct, given that the entire sequence is not, is:
 \begin{align}
-    p_0^* := p(y_t = y^* | \text{not all correct}) &= \frac{p(\text{not all correct}| y_t = y^*) p(y_t = y^*)}{p(\text{not all correct})}\\
-    &= \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}
+    p_0^* &:= p(y_t = y^* | \text{not all correct})\\
+    &= \frac{p(\text{not all correct}| y_t = y^*) p(y_t = y^*)}{p(\text{not all correct})}\\
+    &= \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}.
 \end{align}
 We therefore get
 \begin{equation}
@@ -283,9 +291,9 @@ The full learning dynamics with $\sigma_{**} = 1$ are:
 
 We can also compute the change in correlation as a function of the current correlation for a normalised student+teacher:
 \begin{align}
-    \dot{\rho} &= \frac{\rho + \dot{\sigma_{|*}}}{\sqrt{1+ \dot{\sigma_{||}}}} - \rho\\
-    &\approx (\rho + \dot{\sigma_{|*}})(1-0.5 \dot{\sigma_{||}}) - \rho\\
-    &\approx \dot{\sigma_{|*}} - 0.5 \dot{\sigma_{||}},
+    \dot{\rho} &= \frac{\rho + \dot{\sigma}^2_{|*}}{\sqrt{1+ \dot{\sigma}^2_{||}}} - \rho\\
+    &\approx (\rho + \dot{\sigma}^2_{|*})(1-0.5 \dot{\sigma}^2_{||}) - \rho\\
+    &\approx \dot{\sigma}^2_{|*} - 0.5 \dot{\sigma}^2_{||},
 \end{align}
 to first order in $\eta$.
 We can then write
@@ -296,7 +304,15 @@ We can then write
 \end{align}
 
 It is reasonably straightforward to both (i) linearise these expressions, and (ii) calculate their maximum.
-If we linearise, we get an exponential curve that explains early learning.
+If we linearise, we get an exponential curve that explains early learning:
+\begin{align}
+    \frac{d \rho}{d t} &\approx a \rho + b\\
+    \int \frac{1}{a \rho + b} d\rho &= \int dt \\
+    \frac{1}{a} \log (a \rho + b) &= t + c\\
+    a \rho + b &= c e^{a t} \\
+    \rho &= \frac{b}{a} e^{at} - \frac{b}{a}\\
+    t(\rho = \lambda) &= \frac{1}{a} \log \left ( 1 + \lambda \frac{a}{b} \right ).
+\end{align}
 
 
 \subsubsection*{Gradient signal and noise}
@@ -319,22 +335,22 @@ However, the second moment is still capped at 0.5.
 The expected square of the mean updates is
 \begin{align}
     \braket{\braket{\Delta w_i}_x^2}_i &= \braket{((2 p_c - 1) \beta \hat{w}^*_i - \beta \hat{w}_i)^2}_i\\
-    &= N^(-1) \beta^2 ( 1 + (2p_c-1)^2 - 2 (2 p_c - 1) \rho ).
+    &= N^{-1} \beta^2 ( 1 + (2p_c-1)^2 - 2 (2 p_c - 1) \rho ).
 \end{align}
 The $N^{-1}$ term arises because each element of our student and teacher scales with $N^{-\frac12}$ to ensure normalisation.
 The scaled noise-to-signal ratio is
 \begin{align}
-    \gamma = N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
+    \gamma &= N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
     &\approx \frac{0.5 - 0.5 (2 p_g - 1) (2 p_c - 1)}{\beta^2 ( 1 + (2p_c-1)^2 - 2 (2 p_c - 1) \rho )}.
 \end{align}
 Notably, this is approximately constant in $T$.
 
 In the RL case
 \begin{align}
-    \braket{\Delta w_i} &= \braket{((R-B)( 0.5 y - 0.25 \hat{z}) x_i)^2}\\
-    &\approx \braket{(R-B)^2} (\frac{1}{4} \braket{y^2} + \frac{1}{16} \braket{\hat{z}^2} - \frac{1}{4} \braket{\text{sgn}(\hat{z} \hat{z})})\\
-    &= (p_R + B^2 - 2Bp_R)(\frac{5}{16} + \frac{1}{2}\beta)\\
-    &\geq 0.11 p_R(1-p_R).
+    \braket{\Delta w_i^2}_{x} &= \braket{((R-B)( 0.5 y - 0.25 \hat{z}) x_i)^2}\\
+    &\approx \braket{(R-B)^2} (\frac{1}{4} \braket{y^2} + \frac{1}{16} \braket{\hat{z}^2} - \frac{1}{4} \braket{\text{sgn}(\hat{z}) \hat{z}})\\
+    &= (p_R + B^2 - 2Bp_R)(\frac{5}{16} - \frac{1}{2}\beta)\\
+    &\geq 0.113 p_R(1-p_R).
 \end{align}
 Conversely, 
 \begin{align}
@@ -345,13 +361,46 @@ Conversely,
 Now the scaled signal-to-noise ratio is
 The scaled noise-to-signal ratio is
 \begin{align}
-    \gamma = N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
+    \gamma &= N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
     &\approx p_R^{-1} \frac{0.11 (1-p_R)}{\left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )}.
 \end{align}
 Notably, this scales as $p_R = p_g^T$!
 We therefore see that both supervised and predictive learning have a constant signal-to-noise ratio, while RL is exponentially bad.
 
+
+\subsection*{Orthogonal learning}
+
+In this section, we will assume normalised students and teachers and derive learning rules on the unit sphere.
+We can write the \emph{orthogonal} component of the update as
+\begin{align}
+    \Delta \b{w}_o &= \Delta \b{w} - (\b{w}^T \Delta \b{w}) \b{w}\\
+    \braket{\Delta \b{w}_o} &= \braket{\Delta \b{w}} - \b{w}^T \braket{\Delta \b{w}} \b{w}
+\end{align}
+Our expected updates all take the form
+\begin{equation}
+    \braket{\Delta \b{w}} = \alpha_{|} \hat{\b{w}} + \alpha_{*} \hat{\b{w}}^*.
+\end{equation}
+The orthogonal component is
+\begin{align}
+    \braket{\Delta \b{w}_o} &= \alpha_{|} \hat{\b{w}} + \alpha_{*} \hat{\b{w}}^* - (\alpha_{|} + \alpha_{*} \rho) \hat{\b{w}}\\
+    &= \alpha_{*} (\hat{\b{w}}^* - \rho \hat{\b{w}}).
+\end{align}
+The change in correlation is given by
+\begin{align}
+    \dot{\rho} &\approx \b{w}_*^T \Delta \b{w}_o\\
+    &= \alpha_{*} (1 - \rho^2).
+\end{align}
+
+Empirically, the gradient variance is exactly the same as in the non-orthogonal case.
+However, the gradient signal is smaller.
+This makes some intuitive sense because the gradients are order 1 times x, but the bit we subtract is multiplied by $\hat{w}$, which has elements of order $N^{-\frac12}$.
+
 \newpage
+
+
+
+
+
 
 \subsubsection*{Linearised gradient}
 

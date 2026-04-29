@@ -6,139 +6,42 @@ import matplotlib.pyplot as plt
 import time
 import os
 import pickle
-
-basedir = "/Users/kris/Documents/behrens/research/predictive_learning/"
-print("loaded")
-
-theta = lambda x: (x>0.0).astype(float)
-sign = np.sign
-pi = np.pi
-sigma = lambda x: 1/(1+(np.exp((-x))))
-
-# probability that a single action is good as a function of the student-teacher overlap
-calc_pg = lambda rho: 0.5 + np.arcsin(rho) / np.pi
-
-# probability that at least one sequence out of M is good
-calc_p_good_seq = lambda pg, M, T: 1 - (1 - pg**T)**M
-
-# probability that a single action is good when the entire sequence is not
-calc_failed_pgood = lambda pg, T: pg * (1 - pg**(T-1)) / (1 - pg**T)
-
-# probability that a single action is good when sampling M sequences and returning a correct one if it exists
-def calc_pc(pg, M, T):
-    p_good_seq = calc_p_good_seq(pg, M, T)
-    return p_good_seq + (1-p_good_seq)*calc_failed_pgood(pg, T)
-
-def calc_pc_emp(pg, M, T, K = 10000):
-    corrects = np.random.binomial(1, p = pg, size = (K, M, T))
-    num_correct = corrects.sum(-1)
-    best_inds = np.argmax(num_correct, axis = -1)
-    best_counts = num_correct[np.arange(K), best_inds]
-
-    seqs = corrects[:, 0, :]
-    all_correct = np.where(best_counts == T)[0]
-
-    seqs[all_correct] = corrects[all_correct, best_inds[all_correct]]
-
-    return seqs.mean(), len(all_correct)/K
-
-
-beta = 1 / np.sqrt(2*np.pi)
-
-#%%
-N = 5000
-rho = 0.3
-sig_ss = 0.8
-sig_tt = 1.0
-
-z0 = np.random.normal(0, 1, N)
-z1 = np.random.normal(0, 1, N)
-
-wstar = z0
-w = rho * z0 + np.sqrt(1-rho**2) * z1
-
-w = sig_ss * w / np.sqrt(np.square(w).sum())
-wstar = sig_tt * wstar / np.sqrt(np.square(wstar).sum())
-rho_emp = np.sum(w*wstar) / (np.sqrt(np.sum(w**2)) * np.sqrt(np.sum(wstar**2)))
-
-print([rho, rho_emp.item()], [[np.sum(w1*w2).item() for w1 in [w, wstar]] for w2 in [w, wstar]])
-
-pg = calc_pg(rho)
-pg_sim = np.mean([sign(w @ X) == sign(wstar @ X) for X in [np.random.normal(0, 1, (N, 20240))]])
-
-print(pg, pg_sim)
-
-#%%
-
-K = 50001
-pc = 0.75
-
-X = np.random.normal(0, 1, (N, K))
-
-z = w @ X
-y = np.sign(z)
-ystar = np.sign(wstar @ X)
-
-mask = np.random.binomial(1, p = pc, size = K) #np.random.choice([0, 1], K, p = [1-pc, pc])
-ytarget = mask*ystar - (1-mask)*ystar
-
-print(np.mean(ystar == ytarget), ytarget.mean())
-
-#%%
-
-dw = ((0.5 - theta(z) + 0.5*ytarget)[None, :] * X).mean(-1)
-
-sig_ss = np.sqrt(np.sum(w*w))
-sig_tt = np.sqrt(np.sum(wstar*wstar))
-sig_st = np.sqrt(np.sum(w*wstar))
-
-print(np.sum(dw * wstar), beta*((2*pc - 1)*sig_tt - sig_st**2/sig_ss))
-print(np.sum(dw * w), beta*((2*pc - 1)*sig_st**2/sig_tt - sig_ss))
-
-#%%
-
-for M in [1,2,5]:
-    for T in [1,2,5]:
-        for pg in [0.5, 0.6, 0.7, 0.8, 0.9, 0.9999]:
-            pred_pc, pred_goodseq = calc_pc(pg, M, T), calc_p_good_seq(pg, M, T)
-            sim_pc, sim_goodseq = calc_pc_emp(pg, M, T, K = 100000)
-            print(f"M={M}, T={T}, pg={pg}, good seq = {[np.round(x, 3).item() for x in [pred_goodseq, sim_goodseq]]}, pc = {[np.round(x, 3).item() for x in [pred_pc, sim_pc]]}")
-
-
-# %%
-
-v = w
-
-proj = (theta(v @ X)[None, :] * X).mean(-1)
-beta_emp = np.sqrt(np.square(proj).sum())
-
-print(beta_emp, beta, pearsonr(proj, v))
+from perceptron_utils import *
 
 
 # %% try to simulate a learning trajectory
 
+def setup(mode, linear_sig_coeff, rho):
 
-def run_sim(T, M = 4, iters = int(1e5), eta = 1e-4, linear_sig_coeff = 0.25, mode = "predictive", normalise = False, verbose = False, approx_sigmoid = "step", rho = 0.0):
-
-    assert approx_sigmoid in ["step", "linear"] # how do we approximate the sigmoid in our gradient
-    assert mode in ["predictive", "supervised", "RL", "RL_raw"] # which learning algorithm
-    #assert (not normalise) # doing it wrong
-
+    baseline = None
     if mode == "RL":
         baseline = lambda pR: pR
     if mode == "RL_raw":
         baseline = lambda pR: 0.0
         mode = "RL"
+
+    if linear_sig_coeff == "beta":
+        linear_sig_coeff = beta
+
+    sig_ss2 = 1.0
+    sig_st2 = rho
+
+    return mode, baseline, linear_sig_coeff, sig_ss2, sig_st2
+
+def run_sim(T, M = 4, iters = int(1e5), eta = 1e-4, linear_sig_coeff = 0.25, mode = "predictive", normalise = False, verbose = False, approx_sigmoid = "step", rho = 0.0, orthogonal = False):
+
+    assert approx_sigmoid in ["step", "linear"] # how do we approximate the sigmoid in our gradient
+    assert mode in ["predictive", "supervised", "RL", "RL_raw"] # which learning algorithm
+    
+    mode, baseline, linear_sig_coeff, sig_ss2, sig_st2 = setup(mode, linear_sig_coeff, rho)
+
     if mode == "RL":
         approx_sigmoid = "linear"
-
     if approx_sigmoid == "linear":
         w_coeff = linear_sig_coeff
     elif approx_sigmoid == "step":
         w_coeff = beta
 
-    sig_ss2 = 1.0
-    sig_st2 = rho
     data = []
 
     for iter_ in range(iters):
@@ -153,95 +56,99 @@ def run_sim(T, M = 4, iters = int(1e5), eta = 1e-4, linear_sig_coeff = 0.25, mod
 
         rho = np.clip(sig_st2 / sig_ss, -1.0, 1.0)
         pg = calc_pg(rho)
+        pR = calc_p_good_seq(pg, (M if mode == "predictive" else 1), T)# probability of sampling a correct sequence
 
-        if mode == "predictive":
-            pR = calc_p_good_seq(pg, M, T) # probability of sampling a correct sequence in M tries
-            pc = calc_pc(pg, M, T) # probability of training on a good action
-            dsig_st2 = eta*( beta*(2*pc - 1) - w_coeff*sig_st2/sig_ss)
-            dsig_ss2 = 2*eta*( beta*(2*pc - 1)*sig_st2 - w_coeff*sig_ss)
-
-        elif mode == "supervised":
-            pR = calc_p_good_seq(pg, 1, T)# probability of sampling a correct sequence in one try
-            pc = 1 # always training on a good action
-            dsig_st2 = eta*( beta - w_coeff*sig_st2/sig_ss )
-            dsig_ss2 = 2*eta*( beta*sig_st2 - w_coeff*sig_ss )
-
-        elif mode == "RL":
-            pR = calc_p_good_seq(pg, 1, T)# probability of sampling a correct sequence in one try
+        if mode == "RL":
             pc = pg # probability of training on good action is simply probability of action being good
-            angle = np.arccos(rho) # angle between vectors
-
-            kappa = np.sqrt(pi) * np.sin((pi - angle)/2) / ((pi-angle)*np.sqrt(1+rho))
 
             B = baseline(pR)
+            kappa = calc_kappa(rho)
+            dw_stud = calc_rl_dw_stud(kappa, pR, w_coeff, B, beta)
+            dw_teach = calc_rl_dw_teach(kappa, rho, pR, w_coeff)
+        else:
+            if mode == "supervised":
+                pc = 1 # always train on good action
+            elif mode == "predictive":
+                pc = calc_pc(pg, M, T) # train on sampled action
+            dw_stud = -w_coeff # student coefficient in expected update
+            dw_teach = beta*(2*pc - 1) # teacher coefficient in expected update
 
-            dw1 = 0.5*pR*kappa - w_coeff*pR + w_coeff*B - beta*B
-            dw2 = 0.5*pR*kappa - w_coeff*pR*np.sin(angle)/(pi-angle)
-
-            dsig_st2 = eta*( sig_st2/sig_ss*dw1 + dw2 )
-            dsig_ss2 = 2*eta*( sig_ss*dw1 + sig_st2*dw2)
-
-
-        # rhos, sigs_st, sigs_ss, pgs, pcs 
-        if iter_ % int(np.floor(iters / 100)) == 0:
-            data.append([rho, sig_st2, sig_ss, pg, pc, pR, iter_])
-
-        if verbose and iter_ % 10000 == 0:
-            print()
-            print(data[-1])
-            print(dsig_st2/eta, dsig_ss2/eta)
-
-        # try:
-        #     sig_ss2 = max(1e-10, sig_ss2+dsig_ss2)
-        # except ValueError:
-        #     print(sig_ss2, dsig_ss2.shape)
-        #     print([np.shape(v) for v in [sig_ss, dw1, sig_st2, dw2, sig_st2, rho, pR, pc, kappa, w_coeff, angle, pi]])
-        #     raise NotImplementedError
+        if orthogonal: # only learn from orthogonal component
+            dsig_ss2 = 0.0 # no change in student magnitude
+            dsig_st2 = eta*dw_teach*(1 - rho**2)
+        else:
+            dsig_st2 = eta*( sig_st2/sig_ss*dw_stud + dw_teach )
+            dsig_ss2 = 2*eta*( sig_ss*dw_stud + sig_st2*dw_teach)
 
         sig_ss2 = max(1e-10, sig_ss2+dsig_ss2)
         sig_st2 += dsig_st2
 
+        if iter_ % int(np.floor(iters / 100)) == 0:
+            data.append([rho, sig_st2, sig_ss, pg, pc, pR, iter_])
+
     return np.array(data)
 
-def sample_independent_ytarget(Ytrue, pg, M):
-    batch_size, T = Ytrue.shape
-    corrects = np.random.binomial(1, p = pg, size = (batch_size, M, T)) # decide which sequence elements are correct
-    num_correct = corrects.sum(-1) # how many are correct in each sequence
-    best_inds = np.argmax(num_correct, axis = -1) # what's the best one
-    best_counts = num_correct[np.arange(batch_size), best_inds] # how many counts did it have
+def estimate_grad(mode, w, wstar, T, M = None, batch_size = 10001, approx_sigmoid = "step", linear_sig_coeff = 0.25, baseline = None, independent_samples = True, orthogonal = False):
+    N = w.shape[0]
 
-    seqs = corrects[:, 0, :] # pick our behaviour
-    all_correct = np.where(best_counts == T)[0] # for the batches with a sequence that is entirely correct
-    seqs[all_correct] = 1 # all good
-    
-    Ytarget = seqs * Ytrue - (1-seqs)*Ytrue
-    pc = seqs.mean()
+    # sample inputs
+    X = np.random.normal(0, 1, (batch_size, N, T))
+    Z = w @ X
+    theta_Z = theta(Z) # batch x T
+    sigma_Z = sigma(Z)
+    Ytrue = sign(wstar @ X) # batch x T
+    sig_ss = np.sqrt(np.sum(w**2))
+    pg = calc_pg(np.sum(w*wstar)/sig_ss)
 
-    return Ytarget, pc
+    # how do we approximate our sigmoid in the gradient update?
+    if approx_sigmoid == "step":
+        sig_Z = theta_Z # approximate sigmoid with step function
+    elif approx_sigmoid == "true":
+        sig_Z = sigma_Z
+    elif approx_sigmoid == "linear":
+        sig_Z = 0.5 + linear_sig_coeff * Z / sig_ss # linearise sigmoid
 
+    if mode == "predictive":
+        G = 1 # gain of update
+        if independent_samples: # cheat with sampling sequences
+            Ytarget, pc = sample_independent_ytarget(Ytrue, pg, M)
+        else: # sample from our sigmoids
+            scale = 0.0+2*rho # temperature for sampling
+            Ytarget, pc = sample_sigmoid_ytarget(Ytrue, Z, scale, M)
 
-def sample_sigmoid_ytarget(Ytrue, Z, scale, M):
-    batch_size, T = Ytrue.shape
+    elif mode == "supervised":
+        G = 1 # gain of update
+        pc = 1 # probability of correct target
+        Ytarget = Ytrue # target actions
 
-    sampler_pi = sigma(scale*Z)[:, None, :] * np.ones((batch_size, M, T))
-    Ysamps = np.random.binomial(1, p = sampler_pi)*2.0-1.0
-    corrects = (Ysamps == Ytrue[:, None, :]).astype(int)
-    num_correct = corrects.sum(-1) # how many are correct in each sequence
-    best_inds = np.argmax(num_correct, axis = -1) # what's the best one
-    best_counts = num_correct[np.arange(batch_size), best_inds] # how many counts did it have
+    elif mode == "RL":
+        # compute correlations
+        pR = pg ** T # probability of sampling a correct sequence
+        pc = pg # train on own actions
+        Ytarget = theta_Z*2 - 1 # actions the agent took
+        R = ((Ytarget == Ytrue).sum(-1) == T).astype(float) # reward if full sequence is good
+        G = (R - baseline(pR))[:, None, None] # TD error
 
-    Ytarget = Ysamps[:, 0, :] # pick our samples
-    all_correct = np.where(best_counts == T)[0] # for the batches with a sequence that is entirely correct
-    Ytarget[all_correct] = Ysamps[all_correct, best_inds[all_correct], :] # corresponding sequence
-    
-    pc = (Ytarget == Ytrue).mean()
+    if mode == "supervised_nolog":
+        pc = 1
+        ptrue = 0.5 + Ytrue*(sigma_Z - 0.5)
+        dptrue = Ytrue*sigma_Z*(1-sigma_Z)
+        grads = np.zeros((batch_size, N, T))
+        for t in range(T):
+            not_t = np.arange(T)[np.arange(T) != t]
+            grads[..., t] = ((dptrue[:, t]*np.prod(ptrue[:, not_t], axis = -1))[:, None]*X[..., t])
+    else:
+        # update takes the same form in all cases
+        grads = (G * (0.5 - sig_Z + 0.5*Ytarget)[:, None, :] * X) # size (batch, N, T)
 
-    return Ytarget, pc
+    if orthogonal: # project out component along w
+        w_norm = w[None, :, None] / np.sqrt(np.sum(w**2)) # normalised student weights (1, N, 1)
+        w_olap = np.sum(grads*w_norm, axis = 1, keepdims = True) # component of gradient along normalised student (batch, 1, T)
+        grads = grads - w_olap * w_norm # subtract component along w_norm (batch, N, T)
 
+    return grads, pc
 
-
-
-def run_emp_sim(T, M=4, N = 1000, iters = int(1e5), eta = 1e-4, batch_size = 1001, mode = "predictive", normalise = False, approx_sigmoid = "step", linear_sig_coeff = 0.25, overwrite = False, independent_samples = True, rho = 0, **kwargs):
+def run_emp_sim(T, M=4, N = 1000, iters = int(1e5), eta = 1e-4, batch_size = 1001, mode = "predictive", normalise = False, approx_sigmoid = "step", linear_sig_coeff = 0.25, overwrite = False, independent_samples = True, rho = 0, orthogonal = False, **kwargs):
 
     assert mode in ["predictive", "supervised", "RL", "RL_raw", "supervised_nolog"]
     assert approx_sigmoid in ["step", "linear", "true"]
@@ -253,41 +160,16 @@ def run_emp_sim(T, M=4, N = 1000, iters = int(1e5), eta = 1e-4, batch_size = 100
     print(prm_str)
     if (f"{prm_str}.p" in os.listdir(f"{basedir}/data/")) and (not overwrite):
         return pickle.load(open(f"{basedir}/data/{prm_str}.p", "rb"))
-
-    if mode == "RL":
-        baseline = lambda pR: pR
-    if mode == "RL_raw":
-        baseline = lambda pR: 0.0
-        mode = "RL"
-
-    if linear_sig_coeff == "beta":
-        linear_sig_coeff = beta
-
-    #raise NotImplementedError
-
-    z0 = np.random.normal(0, 1, N)
-    z1 = np.random.normal(0, 1, N)
-    wstar = z0
-    w = rho * z0 + np.sqrt(1-rho**2) * z1
-    wstar = wstar / np.sqrt(np.square(wstar).sum())
     
-    if rho == 0: # start from true zero
-        w = w - np.sum(w*wstar)*wstar
+    mode, baseline, linear_sig_coeff, sig_ss2, sig_st2 = setup(mode, linear_sig_coeff, rho)
 
-    w = w / np.sqrt(np.square(w).sum())
+    w, wstar = sample_w_wstar(N, rho)
 
-    sig_tt, sig_tt2 = 1.0, 1.0
     t0 = time.time()
     data = []
 
     for iter_ in range(iters):
-
-        # sample inputs
-        X = np.random.normal(0, 1, (batch_size, N, T))
-        Z = w @ X
-        theta_Z = theta(Z) # batch x T
-        Ytrue = sign(wstar @ X) # batch x T
-
+        
         if normalise:
             w = w / np.sqrt(np.sum(np.square(w)))
 
@@ -299,50 +181,10 @@ def run_emp_sim(T, M=4, N = 1000, iters = int(1e5), eta = 1e-4, batch_size = 100
         pg = calc_pg(rho)
         pR = calc_p_good_seq(pg, (M if mode == "predictive" else 1), T)# probability of sampling a correct sequence
 
-        # how do we approximate our sigmoid in the gradient update?
-        if approx_sigmoid == "step":
-            sig_Z = theta_Z # approximate sigmoid with step function
-        elif approx_sigmoid == "true":
-            sig_Z = sigma(Z)
-        elif approx_sigmoid == "linear":
-            sig_Z = 0.5 + linear_sig_coeff * Z / sig_ss # linearise sigmoid
-
-        if mode == "predictive":
-            if independent_samples: # cheat with sampling sequences
-                Ytarget, pc = sample_independent_ytarget(Ytrue, pg, M)
-            else: # sample from our sigmoids
-                scale = 0.0+2*rho
-                Ytarget, pc = sample_sigmoid_ytarget(Ytrue, Z, scale, M)
-            G = 1
-            dw = ((0.5 - sig_Z + 0.5*Ytarget)[:, None, :] * X).mean((0,2))
-
-        elif mode == "supervised":
-            pc = 1
-            Ytarget = Ytrue
-            G = 1
-            dw = ((0.5 - sig_Z + 0.5*Ytrue)[:, None, :] * X).mean((0,2))
-
-        elif mode == "RL":
-            pc = pg
-            Ytarget = theta_Z*2 - 1 # actions the agent took
-            R = ((Ytarget == Ytrue).sum(-1) == T).astype(float) # reward if full sequence is good
-            G = (R - baseline(pR))[:, None, None]
-
-        if mode == "supervised_nolog":
-            sigma_Z = sigma(Z)
-            ptrue = 0.5 + Ytrue*(sigma_Z - 0.5)
-            dptrue = Ytrue*sigma_Z*(1-sigma_Z)
-            dw = np.zeros(N)
-            pc = 1
-            for t in range(T):
-                not_t = np.arange(T)[np.arange(T) != t]
-                dw += ((dptrue[:, t]*np.prod(ptrue[:, not_t], axis = -1))[:, None]*X[..., t]).mean(0)/T
-
-        else:
-            # update takes the same form in all cases
-            dw = (G * (0.5 - sig_Z + 0.5*Ytarget)[:, None, :] * X).mean((0,2))
-
-        w += eta*dw
+        # grad is shape (batch, N, T)
+        #grads, pc = estimate_grad(w, wstar, batch_size, T, approx_sigmoid, linear_sig_coeff, mode, baseline, independent_samples, orthogonal)
+        grads, pc = estimate_grad(mode, w, wstar, T, M, batch_size, approx_sigmoid, linear_sig_coeff, baseline, independent_samples, orthogonal)
+        w += eta*grads.mean((0, 2)) # size N
 
         # rhos, sigs_st, sigs_ss, pgs, pcs 
         if iter_ % int(np.floor(iters / 100)) == 0:
@@ -350,8 +192,6 @@ def run_emp_sim(T, M=4, N = 1000, iters = int(1e5), eta = 1e-4, batch_size = 100
 
         if iter_ % int(np.round(iters / 20)) == 0:
             print("\n", iter_, rho, np.round((time.time() - t0)/60, 1))
-            print(np.sum(dw * wstar), beta*((2*pc - 1)*sig_tt - sig_st2/sig_ss))
-            print(np.sum(dw * w), beta*((2*pc - 1)*sig_st2/sig_tt - sig_ss))
 
     pickle.dump(np.array(data), open(f"{basedir}/data/{prm_str}.p", "wb"))
 
@@ -366,16 +206,23 @@ T = 5
 eta = 5e-3
 normalise = True
 
-iters = int(2e4)
-datas = [run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.25),
-run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.10), 
-run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.207), 
-run_sim(T, M = M, iters = iters, eta = eta, mode = "RL_raw", normalise = normalise, approx_sigmoid = "linear"),]
+# iters = int(2e4)
+# datas = [run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.25),
+# run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.10), 
+# run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.207), 
+# run_sim(T, M = M, iters = iters, eta = eta, mode = "RL_raw", normalise = normalise, approx_sigmoid = "linear"),]
+
+# iters = int(0.5e4)
+# datas = [run_sim(T, M = None, iters = iters, eta = eta, mode = "supervised", normalise = normalise, approx_sigmoid = "step"),
+# run_sim(T, M = None, iters = iters, eta = eta, mode = "supervised", normalise = normalise, approx_sigmoid = "linear"),
+# run_sim(T, M = 5, iters = iters, eta = eta, mode = "predictive", normalise = normalise, approx_sigmoid = "step"),]
 
 iters = int(0.5e4)
-datas = [run_sim(T, M = None, iters = iters, eta = eta, mode = "supervised", normalise = normalise, approx_sigmoid = "step"),
-run_sim(T, M = None, iters = iters, eta = eta, mode = "supervised", normalise = normalise, approx_sigmoid = "linear"),
-run_sim(T, M = 5, iters = iters, eta = eta, mode = "predictive", normalise = normalise, approx_sigmoid = "step"),]
+datas = [
+    run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = True),
+    run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = False),
+    run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = False, orthogonal = True)
+    ]
 
 for i in range(len(titles)):
     plt.figure(figsize = (4,3))
@@ -392,12 +239,12 @@ for i in range(len(titles)):
 M = 4
 T = 3
 eta = 1e-2
-iters = int(5e3)
+iters = int(2e3)
 mode = "predictive"
-normalise = True
+normalise = False
 
-data1 = run_sim(T, M = M, iters = iters, eta = eta, mode = mode, normalise = normalise)
-data2 = run_emp_sim(T, M = M, mode = mode, iters = iters, eta = eta, N = 1000, batch_size = 501, normalise = normalise)
+data1 = run_sim(T, M = M, iters = iters, eta = eta, mode = mode, normalise = normalise, orthogonal = True)
+data2 = run_emp_sim(T, M = M, mode = mode, iters = iters, eta = eta, N = 1000, batch_size = 501, normalise = normalise, orthogonal = True)
 
 #%%
 
@@ -415,8 +262,8 @@ for i in range(len(titles)):
 
 #%% compare different learners
 
-eta = 4e-4
-iters = int(8e4)
+eta = 4e-3
+iters = int(8e3)
 T = 5
 Ms = [1, 2, 4, 6, 20]
 normalise = True
@@ -445,14 +292,20 @@ for i in range(len(titles)):
 #%% compare predictive and RL learners across different Ts
 
 
-def plot_by_T(datas):
-    for i in range(len(titles)):
+def plot_by_T(datas, prefix = ""):
+    for i in range(len(titles)+1):
         plt.figure()
         for iT, T in enumerate(Ts):
             xs = datas[iT, :, -1]
-            plt.plot(xs, datas[iT, :, i], color = np.zeros(3) + iT/(3+len(Ts)), label = f"T = {T}")
+
+            if i == len(titles):
+                ys = np.log(datas[iT, :, 0])
+            else:
+                ys = datas[iT, :, i]
+            plt.plot(xs, ys, color = np.zeros(3) + iT/(3+len(Ts)), label = f"T = {T}")
+        
         plt.gca().spines[['right', 'top']].set_visible(False)
-        plt.title(titles[i])
+        plt.title(prefix+"log rho" if i == len(titles) else titles[i])
         plt.legend()
         plt.show()
 
@@ -470,7 +323,7 @@ for mode in ["predictive", "RL"]:
     datas = []
     for T in Ts:
         datas.append(run_sim(T, M=M, iters = iters, eta = eta, normalise = normalise, mode = mode))
-    plot_by_T(np.array(datas))
+    plot_by_T(np.array(datas), prefix = f"{mode}: ")
 
 
 #%% now run true 'simulated' learning
@@ -524,34 +377,49 @@ plot_by_T(np.array(data))
 
 
 #%% plot drho vs rho
-T = 10
+T = 5
 Ms = [2,4,10,20]
 rhos = np.linspace(0.0, 1.0, 101)
 all_rhos = []
-approx = True
-for rho in rhos:
-    sig_st2 = rho
+all_rhos_emp = []
+emp_inds = range(0, len(rhos), 10)
+
+for irho, rho in enumerate(rhos):
+
     pg = calc_pg(rho)
     pR = calc_p_good_seq(pg, 1, T)# probability of sampling a correct sequence in one try
 
     sup_rho = beta*( 1 - rho**2  )
 
     angle = np.arccos(rho) # angle between vectors
-    kappa = np.sqrt(pi) * np.sin((pi - angle)/2) / ((pi-angle)*np.sqrt(1+rho))
-    dw1 = 0.5*pR*kappa - beta*pR
-    dw2 = 0.5*pR*kappa - 0.25*pR*np.sqrt(1-rho**2)/(pi-angle)
-    RL_rho = dw2 *(1 - rho**2 )
+    kappa = calc_kappa(rho)
+    dw_teach = calc_rl_dw_teach(kappa, rho, pR, 0.25)
+    RL_rho = dw_teach *(1 - rho**2 )
 
     M_rhos = []
     for M in Ms:
         pc = calc_pc(pg, M, T) # probability of training on a good action
         M_rhos.append(beta * (2*pc-1)*(1  - rho**2))
 
+
     all_rhos.append(np.array([sup_rho, RL_rho]+M_rhos))
-    
+
+    if irho in emp_inds:
+        print(rho)
+        M_rhos_emp = []
+        for M in Ms:
+            w, wstar = sample_w_wstar(251, rho)
+            #grads, _ = estimate_grad(w, wstar, 40001, T, "step", None, "predictive", None, True, True) # batch, N, T
+            grads, _ = estimate_grad("predictive", w, wstar, T, M = M, batch_size = 40001, approx_sigmoid = "step", independent_samples = True, orthogonal = False)
+            wnew = w + 1e-5*grads.mean((0, 2))
+            drho = np.sum(wnew * wstar)/np.sqrt(np.sum(wnew**2)) - np.sum(w*wstar)
+            M_rhos_emp.append(1e5*drho)
+        all_rhos_emp.append(np.array(M_rhos_emp))
 
 all_rhos = np.array(all_rhos).T
+all_rhos_emp = np.array(all_rhos_emp).T
 
+#%%
 for log in [False, True]:
     cols = [plt.get_cmap("tab10")(i) for i in [0,1]] + [np.zeros(3)+i/(len(Ms)+1) for i in range(len(Ms))]
     plt.figure()
@@ -559,14 +427,15 @@ for log in [False, True]:
         #ys = (all_rhos[i] / np.nanmax(all_rhos[i])) if norm else np.log(all_rhos[i])
         ys = np.log(all_rhos[i]) if log else all_rhos[i]
         plt.plot(rhos, ys, color = cols[i])
+    for i in range(len(all_rhos_emp)):
+        ys_emp = np.log(all_rhos_emp[i]) if log else all_rhos_emp[i]
+        plt.scatter(rhos[emp_inds], ys_emp, marker = ".", s = 100, color = cols[i+2])
     plt.xlabel("rho")
     plt.ylabel("drho")
-    plt.xlim(0, 0.1)
+    #plt.xlim(0, 0.1)
     #plt.ylim(0.0075, 0.0095)
-    plt.ylim(0,0.04)
+    #plt.ylim(0,0.04)
     plt.show()
-
-
 
 
 #%% look at effect of temperature
@@ -583,12 +452,8 @@ T = 5
 for iM, M in enumerate(Ms):
     print(M)
     for irho, rho in enumerate(rhos):
-        z0 = np.random.normal(0, 1, N)
-        z1 = np.random.normal(0, 1, N)
-        wstar = z0
-        w = rho * z0 + np.sqrt(1-rho**2) * z1
-        wstar = wstar / np.sqrt(np.square(wstar).sum())
-        w = w / np.sqrt(np.square(w).sum())
+        
+        w, wstar = sample_w_wstar(N, rho)
 
         X = np.random.normal(0, 1, (batch_size, N, T))
         Z = w @ X
@@ -612,7 +477,75 @@ for iM in range(len(Ms)):
     plt.title(f"M = {Ms[iM]}")
     plt.show()
 
-#%%
+
+#%% verify signal-to-noise stuff
+
+for mode in ["supervised", "predictive", "RL"]:
+
+    M = 5
+    Ts = np.arange(1,11)
+    rhos = np.array([0.0, 0.3, 0.7])
+    #mode = "supervised"
+    data = np.zeros((len(rhos), len(Ts), 3)) # rho, sig, noise/sig
+    emp_inds = range(0, len(Ts), 2)
+    data_emp = np.zeros((len(rhos), len(emp_inds), 3))
+
+    baseline = lambda pR: pR
+
+    for irho, rho in enumerate(rhos):
+        pg = calc_pg(rho)
+
+        if mode == "RL":
+            approx_sigmoid = "linear"
+            pR = pg**Ts
+            var = 0.113*pR*(1-pR)
+
+            kappa = calc_kappa(rho)
+            angle = np.arccos(rho)
+            a1 = 0.5*kappa - beta
+            a2 = 0.5*kappa - 0.25*np.sqrt(1 - rho**2)/(pi-angle)
+
+            meansq = pR**2 * (a1*a1 + a2*a2 + rho*a1*a2)
+
+        else:
+            approx_sigmoid = "step"
+            if mode == "supervised":
+                pc = np.ones(len(Ts)) # always train on good action
+
+            elif mode == "predictive":
+                pc = calc_pc(pg, M, Ts) # train on sampled action
+
+            var = 0.5 - 0.5*(2*pg - 1)*(2*pc - 1)
+            meansq = beta**2 * ( 1 + (2*pc-1)**2 - 2*(2*pc-1)*rho )
+        data[irho, ...] = np.array([meansq, var, np.log(var/meansq)]).T
+
+        for iemp, iT in enumerate(emp_inds):
+            T = Ts[iT]
+            w, wstar = sample_w_wstar(501, rho)
+            #grads, _ = estimate_grad(w, wstar, batch_size, T, approx_sigmoid, linear_sig_coeff, mode, baseline, independent_samples)
+            grads, _ = estimate_grad("predictive", w, wstar, T, M = M, batch_size = 100001, approx_sigmoid = approx_sigmoid, linear_sig_coeff = 0.25, baseline = baseline, independent_samples = True, orthogonal = True)
+            meansq_emp = N*(grads[..., 0].mean(0)**2).mean()
+            var_emp = (grads**2).mean()
+            data_emp[irho, iemp, :] = np.array([meansq_emp, var_emp, np.log(var_emp/meansq_emp)])
+            print(rho, T, [np.round(a, 3) for a in [data[irho, iT, :], data_emp[irho, iemp, :]]])
+
+
+    #%%
+
+    fig, axs = plt.subplots(1, 3, figsize = (12,3.5))
+
+    for ivals in range(3):
+        for irho, rho in enumerate(rhos):
+            col = plt.get_cmap("tab10")(irho) #np.zeros(3) + irho/(len(rhos)+1)
+            #axs[ivals].plot(Ts, data[irho, :, ivals], color = col, label = f"rho = {rho}")
+            axs[ivals].scatter(Ts[emp_inds], data_emp[irho, :, ivals], color = col, marker = ".", s = 300)
+            
+            axs[ivals].set_xlabel("T")
+            axs[ivals].set_title(["N<w_i>^2", "<w_i^2>", "log(noise/sig)"][ivals])
+            axs[ivals].set_xlim(Ts[0]-0.5, Ts[-1]+0.5)
+        if ivals == 0:
+            axs[ivals].legend()
+    plt.show()
 
 #%%
 
@@ -633,78 +566,3 @@ for iM in range(len(Ms)):
 
 
 
-
-
-
-
-
-
-
-
-# %% compute initial overlap vs T for different M
-
-Ts = range(2, 20)
-Ms = [1,3,1e1,1e2,1e3,1e4,1e5]
-data = np.zeros((2, len(Ts), len(Ms)))
-for irho, rho in enumerate([0.0, 0.2]):
-    for iT, T in enumerate(Ts):
-        for iM, M in enumerate(Ms):
-            data[irho, iT, iM] = 2*calc_pc(calc_pg(rho), M, T)-1
-
-plt.figure()
-for irho in range(2):
-    for iM, M in enumerate(Ms):
-        plt.plot(data[irho, :, iM], color = plt.get_cmap("tab10")(iM), ls = ["-", "--"][irho])
-plt.show()
-
-# %%
-
-
-N = 4000
-rho = 0.0
-sig_ss = 1.0
-sig_tt = 1.0
-
-z0 = np.random.normal(0, 1, N)
-z1 = np.random.normal(0, 1, N)
-
-v = z0
-u = rho * z0 + np.sqrt(1-rho**2) * z1
-
-v = sig_ss * v / np.sqrt(np.square(v).sum())
-u = sig_tt * u / np.sqrt(np.square(u).sum())
-
-kappa = (1 + 2/pi*rho*np.arcsin(rho)+2/pi*np.sqrt(1-rho**2))/(1+2/pi*np.arcsin(rho))
-anal = kappa*v
-
-K = 50000
-X = np.random.normal(0, 1, (N, K))
-
-a = v @ X # K
-b = u @ X # K
-
-cond = (np.sign(a)==np.sign(b))
-emp = (a[None, cond]*X[:, cond]).mean(-1)
-
-#emp =  ((cond * a)[None, :] * X).sum(-1) /  cond.sum()
-
-print(pearsonr(anal, emp))
-print(np.sum(anal**2), np.sum(emp**2))
-print(pearsonr(v, emp))
-print(pearsonr(u, emp))
-print(pearsonr(u, v))
-
-#%%
-
-cond1 = (a > 0) & (b > 0)
-cond2 = (a < 0) & (b < 0)
-
-x1 = (a[None, cond1]*X[:, cond1]).mean(-1)
-x2 = (a[None, cond2]*X[:, cond2]).mean(-1)
-
-print(pearsonr(x1, x2))
-for x in [x1, x2]:
-    print(pearsonr(v, x))
-    print(pearsonr(u, x))
-
-# %%

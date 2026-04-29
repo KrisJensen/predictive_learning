@@ -1,0 +1,83 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{titlesec}
+\usepackage[compress]{natbib}
+\usepackage[resetlabels]{multibib}
+\usepackage{authblk}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{braket}
+
+\usepackage[table]{xcolor}
+\usepackage{url}            % simple URL typesetting
+\usepackage{float}
+\definecolor{dred}{rgb}{0.6,0,0}
+\definecolor{dpurple}{HTML}{A020F0}
+\definecolor{dblue}{rgb}{0,0,0.6}
+\definecolor{hlcolor}{rgb}{1,1,0.8}
+\usepackage[colorlinks=true, linkcolor=dblue, citecolor=dred, urlcolor=dblue]{hyperref}       % hyperlinks
+
+\usepackage[nameinlink]{cleveref}
+\usepackage[margin=1in]{geometry}
+\renewcommand\b\bm
+\newcommand*\sgn[1]{\text{sgn} ({#1})}
+\setlength{\parindent}{0pt}
+\setlength{\parskip  }{5.5pt}
+\creflabelformat{equation}{#2\textup{#1}#3}
+
+\title{\Large{Learning to predict model-based actions}}
+
+\author[1]{\normalsize \bfseries Kristopher T.\ Jensen}
+\affil[1]{ \small Sainsbury Wellcome Centre, University College London, London, UK}
+\date{\vspace*{-2.0em}
+\normalsize kris.torp.jensen@gmail.com
+}
+
+
+
+\begin{document}
+
+\maketitle
+
+Here we think about planning in the context of an STA.
+
+We will assume that a `policy' is read out from PFC for each time $t$.
+For now, we will assume that the policy takes the form of a sequence of desired states $a_t = \tilde{s}_t$.
+\begin{equation}
+    a_t \sim \pi_t(a | \b{x}) = \lambda_t^{-1} \exp \left [ \b{\phi}_{at}^T \b{x}  \right ].
+\end{equation}
+A sequence of desired states $\{ a_t \sim \pi_t \}$ is sampled and passed on to HPC/VS.
+HPC/VS is a predictive model that generates
+\begin{align}
+    \hat{s}_t &\sim p_{HPC} (s | \hat{s}_{t-1}, a_t)\\
+    \hat{r}_t &\sim p_{VS} (r | \hat{s}_t).
+\end{align}
+We can then update the prefrontal representation based on a single simulation:
+\begin{align}
+    \Delta \b{x} &\propto \nabla_{\b{x}} J(\b{x}) \\
+    &= \sum_{t=1^T} (R - B) \nabla_{\b{x}} \log \pi_t(a_t | \b{x})\\
+    &= (R - B) \sum_{t=1^T} \phi_{a_t, t} (1 - \pi_t(a_t)) \\
+\end{align}
+Here, $R = \sum_{t = 1}^T r_t$ is the cumulative reward associated with a sequence.
+We let the true reward be
+\begin{equation}
+    r_t = R(s_t, t) - \lambda [s_t != a_t].
+\end{equation}
+In other words, the reward received is the reward available at the state visited, minus a penalty for impossible actions.
+
+The `planning' parameters will be learned as follows:
+$\{ \b{\phi}_t \}$ are learned via logistic regression on the past $N_\phi$ trials to predict the expected location in $t$ actions.
+$p_{HPC} (s | s_{t-1}, a_t) = f_{HPC}(s_{t-1}, a_t)$ is a neural network trained on pairs of past state-action-state pairs $\{ s_{\tau-1}, a_\tau, s_\tau \}$.
+$p_{VS} (r | s_t) = f_{VS}(s_t, \mathcal{R})$ is a neural network trained on previous combinations of `future states and observations' $\{ s_{\tau+t}, r_{\tau+t} \}$ to predict the reward received if visiting state $s_t$.
+
+PFC is a recurrent neural network,
+\begin{align}
+    \tau \Delta \b{z} &= -\b{z} + \b{W}_{rec} \b{x} + \b{W}_{in} \b{u} + \b{b}_{rec}\\
+    \b{x} &= [\b{z}]_+\\
+    \b{y} &= \b{W}_{out} \b{x}.
+\end{align}
+It is trained to predict either just an immediate target action $a_0$ or an entire target sequence $\{ a_t \}$.
+In the first case, $\b{y} \in \mathbb{R}^{N}$.
+In the second, $\b{y} \in \mathbb{R}^{N \times T}$, and separate output weights are learned for each point in time.
+We will train both with both predictive and supervised learning, and see what works best.
+
+\end{document}
