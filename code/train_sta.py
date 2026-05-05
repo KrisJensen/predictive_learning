@@ -88,6 +88,9 @@ pickle.dump(data, open(f"{basedir}/models/test.p", "wb"))
 data = pickle.load(open(f"{basedir}/models/test.p", "rb"))
 rnn = data["rnn"].to(device)
 env = data["env"]
+max_steps = env.max_steps
+Nloc = env.num_locs
+batch_inds = env.batch_inds
 all_epochs = data["all_epochs"]
 all_losses = data["all_losses"]
 all_accs = data["all_accs"]
@@ -145,7 +148,7 @@ def pred_loss(rs, locs, Cs, bs, L2_reg = 1e-5, olap_reg = 0.0):
     loss = loss + L2_reg*( (Cs**2).mean() + (bs**2).mean() ) # cross-entropy loss + regularisation
     
     if olap_reg > 1e-10:
-        loss = loss + olap_reg*( calc_overlap(Cs).mean() ) # overlap regularisation
+        loss = loss + olap_reg * calc_overlap(Cs).abs().sum() # overlap regularisation
 
     return loss
 
@@ -194,7 +197,7 @@ optim2 = torch.optim.Adam([Cs, bs], lr = 1e-2)
 epochs = 100
 for epoch in range(epochs):
     optim2.zero_grad()
-    loss = pred_loss(train_x, train_y, Cs, bs, L2_reg = 1e-5, olap_reg = (0.0 if epoch < 60 else 50e0))
+    loss = pred_loss(train_x, train_y, Cs, bs, L2_reg = 1e-5, olap_reg = (0.0 if epoch < 60 else 5e-3))
     loss.backward()
     optim2.step()
     
@@ -206,50 +209,69 @@ for epoch in range(epochs):
 
 Cs, bs = Cs.detach(), bs.detach()
 Csnorm = Cs / torch.square(Cs).sum(-1, keepdims = True).sqrt()
-olap = (Csnorm[None, ...] * Csnorm[:, None, :]).sum(-1).mean(-1) # average overlap across locs for each pair of subspaces
+olap = (Csnorm[None, ...] * Csnorm[:, None, :]).sum(-1).abs().mean(-1) # average overlap across locs for each pair of subspaces
 
 print(torch.round(olap, decimals = 2))
             
             
 #%% now try to run a 'hippocampal simulation' and see if we can increase performance!
 
-def sample_seq(loc, pis, adjacency):
+np.random.seed(0)
+torch.manual_seed(0)
+
+def sample_seq(loc, pis, adjacency, greedy = False):
     curr_loc = loc.clone() # batch
     batch_inds = torch.arange(loc.shape[0])
-    pi_as = torch.zeros(batch_inds, max_steps)
-    locs = torch.zeros(batch_inds, max_steps, dtype = int)
+    pi_as = torch.zeros(loc.shape[0], max_steps)
+    locs = torch.zeros(loc.shape[0], max_steps, dtype = int)
     for t in range(max_steps):
         adj = adjacency[batch_inds, curr_loc, :] # renormalize over adjacent states (batch, Nloc)
         pi = (pis[:, t, :]+1e-20) * adj # add some jitter to make sure the policy is not exactly zero. Otherwise we sometimes run into nans
         pi = pi/pi.sum(-1, keepdims = True) # normalise (batch, Nloc)
         
-        curr_loc = torch.multinomial(pi, 1)[..., 0]
+        if greedy:
+            curr_loc = torch.argmax(pi, -1)
+        else:
+            curr_loc = torch.multinomial(pi, 1)[..., 0]
+            
         locs[:, t] = curr_loc
         pi_as[:, t] = pi[batch_inds, curr_loc] # what was the probability of going here?
     
     return locs, pi_as
         
+# def legacy_sequence_rew(loc, rews, adjacency, path):
+#     curr_loc = loc.clone()
+#     Rs = torch.zeros(loc.shape[0], max_steps)
+#     batch_inds = torch.arange(loc.shape[0])
+#     for t, action in enumerate(path.T):
+    
+#         adjacent = adjacency[batch_inds, curr_loc][batch_inds, action] # which actions are valid
+#         adj_bool = adjacent.to(bool)
+#         curr_loc[adj_bool] = action[adj_bool] # update location for valid actions
+#         Rs[:, t] = rews[env.batch_inds, t+1, loc] # what is the reward where I end up?
+#         Rs[:, t] -= 1.0*(1.0 - adjacent) # penalty for impossible actions
+    
+#     return Rs.sum(-1)
 
-
-def sequence_rew(loc, rews, adjacency, path):
-    curr_loc = loc.clone()
-    Rs = torch.zeros(loc.shape[0], max_steps)
-    batch_inds = torch.arange(loc.shape[0])
-    for t, action in enumerate(path.T):
+def sequence_rew(rews, path):
+    batch_inds = torch.arange(rews.shape[0])
+    # simply the reward available at each location
+    step_rews = torch.stack([rews[batch_inds, t, path[:, t]] for t in range(path.shape[1])])
+    return step_rews.sum(0)
     
-        adjacent = adjacency[batch_inds, curr_loc][batch_inds, action] # which actions are valid
-        adj_bool = adjacent.to(bool)
-        curr_loc[adj_bool] = action[adj_bool] # update location for valid actions
-        Rs[:, t] = rews[env.batch_inds, t+1, loc] # what is the reward where I end up?
-        Rs[:, t] -= 1.0*(1.0 - adjacent) # penalty for impossible actions
-    
-    return Rs.sum(-1)
-    
-def eval(logpis, loc, rews, adjacency, iters = 1000):
-    Rs = torch.zeros(iters, logpis.shape[0])
+# def eval(logpis, loc, rews, adjacency, iters = 1000):
+#     Rs = torch.zeros(iters, logpis.shape[0])
+#     for iter_ in range(iters):
+#         samp_seq = torch.distributions.Categorical(logits = logpis).sample() # sample a single sequence
+#         Rs[iter_, :]= sequence_rew(loc, rews, adjacency, samp_seq)
+#     return Rs.mean(0)
+def eval(pis, loc, rews, adjacency, iters = 1000, greedy = False):
+    if greedy:
+        iters = 1
+    Rs = torch.zeros(iters, pis.shape[0])
     for iter_ in range(iters):
-        samp_seq = torch.distributions.Categorical(logits = logpis).sample() # sample a single sequence
-        Rs[iter_, :]= sequence_rew(loc, rews, adjacency, samp_seq)
+        samp_seq = sample_seq(loc, pis, adjacency, greedy = greedy)[0]
+        Rs[iter_, :]= sequence_rew(rews, samp_seq)
     return Rs.mean(0)
 
 env.reset()
@@ -259,25 +281,28 @@ rnn.forward(reset_env = False) # run some random trial
 # this is our baseline activity that we want to improve
 rs0 = rnn.r.detach().cpu()[..., 0]
 logpis0 = pred_logprobs(rs0, Cs, bs) # this our base policy
-greedy_path = logpis0.argmax(-1) # initial greedy path
-Rbase = sequence_rew(loc, rews, adjacency, greedy_path) # greedy reward (batch, )
-
-R0 = eval(logpis0, loc, rews, adjacency, iters = 2000)
+pis0 = logpis0.exp()
+#greedy_path = logpis0.argmax(-1) # initial greedy path
+#Rbase = sequence_rew(loc, rews, adjacency, greedy_path) # greedy reward (batch, )
+Rbase = eval(pis0, loc, rews, adjacency, greedy = True)
+R0 = eval(pis0, loc, rews, adjacency, iters = 2000)
 
 rs = rnn.r.detach().cpu()[..., 0]
-lr = 0.1
-plan_batch = 100
-for iter_ in range(100):
+lr = 0.3
+plan_batch = 2
+num_batches = 20
+
+for iter_ in range(num_batches):
     
     grads = torch.zeros(plan_batch, rs.shape[0], Nrec)
     
     for p in range(plan_batch):
         logpis = pred_logprobs(rs, Cs, bs) # this our current policy
         pis = logpis.exp()
-        greedy_R = sequence_rew(loc, rews, adjacency, logpis.argmax(-1)) # greedy reward (batch, )
+        greedy_R = eval(pis, loc, rews, adjacency, greedy = True) # greedy reward (batch, )
         
-        samp_seq = torch.distributions.Categorical(logits = logpis).sample() # sample a single sequence
-        R_seq = sequence_rew(loc, rews, adjacency, samp_seq) # how good is it?
+        samp_seq, action_probs = sample_seq(loc, pis, adjacency, greedy = False)
+        R_seq = sequence_rew(rews, samp_seq) # how good is it?
         td_err = R_seq - Rbase # what is the TD error
         
         if (iter_ % 5 == 0) and (p == 0):
@@ -285,23 +310,31 @@ for iter_ in range(100):
 
         samp_1hot = one_hot(samp_seq, Nloc) # one-hot version
         action_prms = (samp_1hot[..., None]*Cs[None, ...]).sum(2) # parameters associated with the action I took for each trial and time
-        action_probs = (samp_1hot * pis).sum(-1) # probability of taken action under my policy
         
-        #td_err = R_seq # maybe just use zero baseline
+        # action_probs = (samp_1hot * pis).sum(-1) # probability of taken action under my policy
+        
+        # td_err = R_seq # maybe just use zero baseline
         grad = td_err[:, None] * ( action_prms*(1.0 - action_probs)[..., None] ).sum(1) # policy gradient
         grads[p, ...] = grad
         
     rs = rs + lr*grad.mean(0) # update my firing rates
     
 logpis1 = pred_logprobs(rs, Cs, bs) # this our final policy
-R1 = eval(logpis1, loc, rews, adjacency, iters = 2000) # how good is it
+pis1 = logpis1.exp()
+R1 = eval(pis1, loc, rews, adjacency, iters = 2000) # how good is it
 
+diffs = R1 - R0
+maxdiff = np.abs(diffs).max()
+bins = np.linspace(-maxdiff, maxdiff, 21)
 plt.figure()
-plt.hist(R1 - R0)
-plt.axvline((R1 - R0).mean())
-print((R1 - R0).mean())
+plt.hist(diffs, bins = bins)
+plt.axvline(diffs.mean(), color = "k", zorder = 10)
+plt.xlim(-maxdiff, maxdiff)
 plt.show()
 
+greedy_R = eval(pis1, loc, rews, adjacency, greedy = True)
+print(diffs.mean(), diffs.std()/np.sqrt(len(diffs)))
+print((greedy_R-Rbase).mean(), (greedy_R-Rbase).std()/np.sqrt(len(Rbase)))
 
 #%%
 
