@@ -5,8 +5,10 @@ from scipy.stats import pearsonr
 import matplotlib.pyplot as plt
 import time
 import os
+os.chdir("/ceph/behrens/kris/research/predictive_learning/code")
 import pickle
 from perceptron_utils import *
+
 
 
 # %% try to simulate a learning trajectory
@@ -204,25 +206,27 @@ titles = ["student-teacher correlation", "student-teacher overlap", "student mag
 M = 4
 T = 5
 eta = 5e-3
-normalise = True
+orthogonal = False
+normalise = False
 
-# iters = int(2e4)
-# datas = [run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.25),
-# run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.10), 
-# run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.207), 
-# run_sim(T, M = M, iters = iters, eta = eta, mode = "RL_raw", normalise = normalise, approx_sigmoid = "linear"),]
+iters = int(2e4)
+datas = [run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.25, orthogonal=orthogonal),
+run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.10, orthogonal=orthogonal), 
+run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.207, orthogonal=orthogonal), 
+run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = beta, orthogonal=orthogonal), 
+run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, approx_sigmoid = "linear", linear_sig_coeff = 0.0, orthogonal=orthogonal),]
 
 # iters = int(0.5e4)
 # datas = [run_sim(T, M = None, iters = iters, eta = eta, mode = "supervised", normalise = normalise, approx_sigmoid = "step"),
 # run_sim(T, M = None, iters = iters, eta = eta, mode = "supervised", normalise = normalise, approx_sigmoid = "linear"),
 # run_sim(T, M = 5, iters = iters, eta = eta, mode = "predictive", normalise = normalise, approx_sigmoid = "step"),]
 
-iters = int(0.5e4)
-datas = [
-    run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = True),
-    run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = False),
-    run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = False, orthogonal = True)
-    ]
+# iters = int(0.5e4)
+# datas = [
+#     run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = True),
+#     run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = False),
+#     run_sim(T, M = 4, iters = iters, eta = eta, mode = "predictive", normalise = False, orthogonal = True)
+#     ]
 
 for i in range(len(titles)):
     plt.figure(figsize = (4,3))
@@ -342,25 +346,29 @@ for iT, T in enumerate(Ts):
     print("\n\n", T)
     data1 = run_sim(T, M = M, iters = iters, eta = eta, mode = mode, normalise = normalise)
     data2 = run_emp_sim(T, M = M, mode = mode, iters = iters, eta = eta, N = 1000, batch_size = 501, normalise = normalise, approx_sigmoid = "true", independent_samples = False)
-
-    data.append([data2, data1])
+    data3 = run_sim(T, M = M, iters = iters, eta = eta, mode = "RL", normalise = normalise, linear_sig_coeff=0.25)
+    
+    data.append([data2, data1, data3])
 
 #%%
 
-datas = [np.array([dat[i] for dat in data]) for i in range(2)]
+datas = [np.array([dat[i] for dat in data]) for i in range(3)]
 
-for i in range(len(titles)):
-    plt.figure()
-    for iT, T in enumerate(Ts):
-        for idata in range(2):
-            col = np.array([[0,1,0], [0,0,1]][idata]) * (iT+1)/(len(Ts)-0)
-            label = (f"T = {T}" if idata == 0 else None)
-            xs = datas[idata][iT, :, -1]
-            plt.plot(xs, datas[idata][iT, :, i], color = col, label = label, ls = ["-", "--"][idata])
-    plt.title(titles[i])
-    plt.legend()
-    plt.gca().spines[['right', 'top']].set_visible(False)
-    plt.show()
+for qq in range(2):
+    for i in range(len(titles)):
+        plt.figure()
+        for iT, T in enumerate(Ts):
+            for idata in range(3):
+                col = np.array([[0,1,0], [0,0,1], [1, 0, 0]][idata]) * (iT+1)/(len(Ts)-0)
+                label = (f"T = {T}" if idata == 0 else None)
+                xs = datas[idata][iT, :, -1]
+                plt.plot(xs, datas[idata][iT, :, i], color = col, label = label, ls = ["-", "--", ":"][idata])
+        plt.title(titles[i])
+        plt.legend()
+        plt.gca().spines[['right', 'top']].set_visible(False)
+        if qq == 1:
+            plt.xlim(0, 2e3)
+        plt.show()
 
 #%% also try supervised learning on expected reward instead of log reward!
 
@@ -409,7 +417,6 @@ for irho, rho in enumerate(rhos):
         M_rhos_emp = []
         for M in Ms:
             w, wstar = sample_w_wstar(251, rho)
-            #grads, _ = estimate_grad(w, wstar, 40001, T, "step", None, "predictive", None, True, True) # batch, N, T
             grads, _ = estimate_grad("predictive", w, wstar, T, M = M, batch_size = 40001, approx_sigmoid = "step", independent_samples = True, orthogonal = False)
             wnew = w + 1e-5*grads.mean((0, 2))
             drho = np.sum(wnew * wstar)/np.sqrt(np.sum(wnew**2)) - np.sum(w*wstar)
@@ -480,14 +487,18 @@ for iM in range(len(Ms)):
 
 #%% verify signal-to-noise stuff
 
+orthogonal = True
+linear_sig_coeff = 0.25
+#linear_sig_coeff = 0
+
 for mode in ["supervised", "predictive", "RL"]:
 
     M = 5
-    Ts = np.arange(1,11)
+    Ts = np.arange(1,14)
     rhos = np.array([0.0, 0.3, 0.7])
-    #mode = "supervised"
     data = np.zeros((len(rhos), len(Ts), 3)) # rho, sig, noise/sig
     emp_inds = range(0, len(Ts), 2)
+    empirical_thresh = -1
     data_emp = np.zeros((len(rhos), len(emp_inds), 3))
 
     baseline = lambda pR: pR
@@ -498,14 +509,13 @@ for mode in ["supervised", "predictive", "RL"]:
         if mode == "RL":
             approx_sigmoid = "linear"
             pR = pg**Ts
-            var = 0.113*pR*(1-pR)
+            #var = 0.113*pR*(1-pR)
+            var = pR*(1- pR)*(0.25 + linear_sig_coeff**2 - 2 *linear_sig_coeff * beta)
 
             kappa = calc_kappa(rho)
             angle = np.arccos(rho)
-            a1 = 0.5*kappa - beta
-            a2 = 0.5*kappa - 0.25*np.sqrt(1 - rho**2)/(pi-angle)
-
-            meansq = pR**2 * (a1*a1 + a2*a2 + rho*a1*a2)
+            dw_stud = pR* (0.5*kappa - beta)
+            dw_teach = pR* (0.5*kappa - linear_sig_coeff*np.sqrt(1 - rho**2)/(pi-angle))
 
         else:
             approx_sigmoid = "step"
@@ -516,28 +526,38 @@ for mode in ["supervised", "predictive", "RL"]:
                 pc = calc_pc(pg, M, Ts) # train on sampled action
 
             var = 0.5 - 0.5*(2*pg - 1)*(2*pc - 1)
-            meansq = beta**2 * ( 1 + (2*pc-1)**2 - 2*(2*pc-1)*rho )
+            dw_stud = -beta
+            dw_teach = (2*pc-1)*beta
+            
+        if orthogonal:
+            meansq = dw_teach**2 * (1-rho**2)
+        else:
+            meansq = (dw_stud**2 + dw_teach**2 + 2*rho*dw_stud*dw_teach)
+            
         data[irho, ...] = np.array([meansq, var, np.log(var/meansq)]).T
 
         for iemp, iT in enumerate(emp_inds):
             T = Ts[iT]
-            w, wstar = sample_w_wstar(501, rho)
-            #grads, _ = estimate_grad(w, wstar, batch_size, T, approx_sigmoid, linear_sig_coeff, mode, baseline, independent_samples)
-            grads, _ = estimate_grad("predictive", w, wstar, T, M = M, batch_size = 100001, approx_sigmoid = approx_sigmoid, linear_sig_coeff = 0.25, baseline = baseline, independent_samples = True, orthogonal = True)
-            meansq_emp = N*(grads[..., 0].mean(0)**2).mean()
-            var_emp = (grads**2).mean()
+            N = 401
+            w, wstar = sample_w_wstar(N, rho)
+            if T < empirical_thresh:
+                grads, _ = estimate_grad(mode, w, wstar, T, M = M, batch_size = 100001, approx_sigmoid = approx_sigmoid, linear_sig_coeff = linear_sig_coeff, baseline = baseline, independent_samples = True, orthogonal = orthogonal)
+                meansq_emp = N*(grads[..., 0].mean(0)**2).mean()
+                var_emp = (grads**2).mean()
+                
+            else:
+                meansq_emp, var_emp = np.nan, np.nan
             data_emp[irho, iemp, :] = np.array([meansq_emp, var_emp, np.log(var_emp/meansq_emp)])
             print(rho, T, [np.round(a, 3) for a in [data[irho, iT, :], data_emp[irho, iemp, :]]])
 
-
-    #%%
+    #%
 
     fig, axs = plt.subplots(1, 3, figsize = (12,3.5))
 
     for ivals in range(3):
         for irho, rho in enumerate(rhos):
             col = plt.get_cmap("tab10")(irho) #np.zeros(3) + irho/(len(rhos)+1)
-            #axs[ivals].plot(Ts, data[irho, :, ivals], color = col, label = f"rho = {rho}")
+            axs[ivals].plot(Ts, data[irho, :, ivals], color = col, label = f"rho = {rho}")
             axs[ivals].scatter(Ts[emp_inds], data_emp[irho, :, ivals], color = col, marker = ".", s = 300)
             
             axs[ivals].set_xlabel("T")

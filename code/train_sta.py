@@ -157,7 +157,7 @@ all_rs = []
 all_best_paths = []
 all_real_paths = []
 
-num_epochs = 100
+num_epochs = 200
 
 rnn.greedy = False
 with torch.no_grad():
@@ -194,7 +194,7 @@ bs = nn.Parameter(torch.zeros(max_steps, Nloc))
 
 optim2 = torch.optim.Adam([Cs, bs], lr = 1e-2)
 
-epochs = 100
+epochs = 200
 for epoch in range(epochs):
     optim2.zero_grad()
     loss = pred_loss(train_x, train_y, Cs, bs, L2_reg = 1e-5, olap_reg = (0.0 if epoch < 60 else 5e-3))
@@ -207,17 +207,23 @@ for epoch in range(epochs):
             test_acc = (test_ps.argmax(-1) == test_y.argmax(-1)).to(float).mean(0).detach().cpu().numpy()
             print(epoch, loss.item(), test_acc)
 
-Cs, bs = Cs.detach(), bs.detach()
+Cs, bs = Cs.detach().cpu(), bs.detach().cpu()
 Csnorm = Cs / torch.square(Cs).sum(-1, keepdims = True).sqrt()
 olap = (Csnorm[None, ...] * Csnorm[:, None, :]).sum(-1).abs().mean(-1) # average overlap across locs for each pair of subspaces
 
 print(torch.round(olap, decimals = 2))
-            
+
+#pickle.dump([Cs, bs], open(f"{basedir}/models/decoders.p", "wb"))
+
+#%%
+#Cs, bs = pickle.load(open(f"{basedir}/models/decoders.p", "rb"))
+
             
 #%% now try to run a 'hippocampal simulation' and see if we can increase performance!
-
-np.random.seed(0)
-torch.manual_seed(0)
+seed = 0
+seed = 1
+np.random.seed(seed)
+torch.manual_seed(seed)
 
 def sample_seq(loc, pis, adjacency, greedy = False):
     curr_loc = loc.clone() # batch
@@ -238,41 +244,58 @@ def sample_seq(loc, pis, adjacency, greedy = False):
         pi_as[:, t] = pi[batch_inds, curr_loc] # what was the probability of going here?
     
     return locs, pi_as
-        
-# def legacy_sequence_rew(loc, rews, adjacency, path):
-#     curr_loc = loc.clone()
-#     Rs = torch.zeros(loc.shape[0], max_steps)
-#     batch_inds = torch.arange(loc.shape[0])
-#     for t, action in enumerate(path.T):
-    
-#         adjacent = adjacency[batch_inds, curr_loc][batch_inds, action] # which actions are valid
-#         adj_bool = adjacent.to(bool)
-#         curr_loc[adj_bool] = action[adj_bool] # update location for valid actions
-#         Rs[:, t] = rews[env.batch_inds, t+1, loc] # what is the reward where I end up?
-#         Rs[:, t] -= 1.0*(1.0 - adjacent) # penalty for impossible actions
-    
-#     return Rs.sum(-1)
 
 def sequence_rew(rews, path):
     batch_inds = torch.arange(rews.shape[0])
     # simply the reward available at each location
     step_rews = torch.stack([rews[batch_inds, t, path[:, t]] for t in range(path.shape[1])])
-    return step_rews.sum(0)
-    
-# def eval(logpis, loc, rews, adjacency, iters = 1000):
-#     Rs = torch.zeros(iters, logpis.shape[0])
-#     for iter_ in range(iters):
-#         samp_seq = torch.distributions.Categorical(logits = logpis).sample() # sample a single sequence
-#         Rs[iter_, :]= sequence_rew(loc, rews, adjacency, samp_seq)
-#     return Rs.mean(0)
+    return step_rews.T
+
 def eval(pis, loc, rews, adjacency, iters = 1000, greedy = False):
     if greedy:
         iters = 1
-    Rs = torch.zeros(iters, pis.shape[0])
+    Rs = torch.zeros(iters, pis.shape[0], pis.shape[1]) # iters by batch by step
     for iter_ in range(iters):
         samp_seq = sample_seq(loc, pis, adjacency, greedy = greedy)[0]
-        Rs[iter_, :]= sequence_rew(rews, samp_seq)
-    return Rs.mean(0)
+        Rs[iter_, ...]= sequence_rew(rews, samp_seq)
+    return Rs.mean(0) # batch, step
+
+def optimise_representation(rs, baseline = torch.tensor(0.0), lr = 0.2, plan_batch = 1, num_batches = 40, print_every = 1e6, compare_greedy = True):
+
+    for iter_ in range(num_batches):
+        
+        grads = torch.zeros(plan_batch, rs.shape[0], Nrec)
+        
+        for p in range(plan_batch):
+            logpis = pred_logprobs(rs, Cs, bs) # this our current policy
+            pis = logpis.exp()
+            
+            samp_seq, action_probs = sample_seq(loc, pis, adjacency, greedy = False)
+            R_seq = sequence_rew(rews, samp_seq) # how good is it?(batch, step)
+            
+            if len(baseline.shape) == 2: # for each timepoint separately
+                R_togo = R_seq.flip(-1).cumsum(-1).flip(-1) #(batch, steps)
+                td_err = R_togo - baseline
+            else:
+                td_err = (R_seq.sum(-1) - baseline)[:, None] # what is the TD error (batch, 1) 
+            
+            if (iter_ % print_every == 0) and (p == 0):
+                
+                if compare_greedy:
+                    greedy_R = eval(pis, loc, rews, adjacency, greedy = True) # greedy reward (batch, step)
+                
+                print(iter_, greedy_R.sum(-1).mean(), (td_err[:, 0] > 0.0).to(torch.float).mean(), pis.amax(-1).median(0).values)
+
+            samp_1hot = one_hot(samp_seq, Nloc) # one-hot version (batch, step, Nloc)
+            action_prms = (samp_1hot[..., None]*Cs[None, ...]).sum(2) # parameters associated with the action I took for each trial and time (batch, step, Nrec)
+
+            grad = ( action_prms*(td_err*(1.0 - action_probs))[..., None] ).sum(1) # policy gradient
+            grads[p, ...] = grad
+            
+        rs = rs + lr*grad.mean(0) # update my firing rates
+    
+    return rs
+
 
 env.reset()
 loc, rews, adjacency = env.loc.detach().clone(), env.rews.detach().clone(), env.adjacency.detach().clone()
@@ -282,48 +305,23 @@ rnn.forward(reset_env = False) # run some random trial
 rs0 = rnn.r.detach().cpu()[..., 0]
 logpis0 = pred_logprobs(rs0, Cs, bs) # this our base policy
 pis0 = logpis0.exp()
-#greedy_path = logpis0.argmax(-1) # initial greedy path
-#Rbase = sequence_rew(loc, rews, adjacency, greedy_path) # greedy reward (batch, )
-Rbase = eval(pis0, loc, rews, adjacency, greedy = True)
+Rg0 = eval(pis0, loc, rews, adjacency, greedy = True)
 R0 = eval(pis0, loc, rews, adjacency, iters = 2000)
 
 rs = rnn.r.detach().cpu()[..., 0]
-lr = 0.3
-plan_batch = 2
-num_batches = 20
 
-for iter_ in range(num_batches):
-    
-    grads = torch.zeros(plan_batch, rs.shape[0], Nrec)
-    
-    for p in range(plan_batch):
-        logpis = pred_logprobs(rs, Cs, bs) # this our current policy
-        pis = logpis.exp()
-        greedy_R = eval(pis, loc, rews, adjacency, greedy = True) # greedy reward (batch, )
-        
-        samp_seq, action_probs = sample_seq(loc, pis, adjacency, greedy = False)
-        R_seq = sequence_rew(rews, samp_seq) # how good is it?
-        td_err = R_seq - Rbase # what is the TD error
-        
-        if (iter_ % 5 == 0) and (p == 0):
-            print(iter_, greedy_R.mean(), (td_err > 0.0).to(torch.float).mean(), pis.amax(-1).median(0).values)
+Vt = Rg0.flip(-1).cumsum(-1).flip(-1)
+Vtot = Vt[:, 0]
 
-        samp_1hot = one_hot(samp_seq, Nloc) # one-hot version
-        action_prms = (samp_1hot[..., None]*Cs[None, ...]).sum(2) # parameters associated with the action I took for each trial and time
-        
-        # action_probs = (samp_1hot * pis).sum(-1) # probability of taken action under my policy
-        
-        # td_err = R_seq # maybe just use zero baseline
-        grad = td_err[:, None] * ( action_prms*(1.0 - action_probs)[..., None] ).sum(1) # policy gradient
-        grads[p, ...] = grad
-        
-    rs = rs + lr*grad.mean(0) # update my firing rates
-    
+rs = optimise_representation(rs, baseline = Vtot, lr = 0.2, plan_batch = 1, num_batches = 40, print_every = 1e6, compare_greedy = True)
+
 logpis1 = pred_logprobs(rs, Cs, bs) # this our final policy
 pis1 = logpis1.exp()
 R1 = eval(pis1, loc, rews, adjacency, iters = 2000) # how good is it
 
-diffs = R1 - R0
+# how does the expected reward change
+
+diffs = (R1 - R0).sum(-1)
 maxdiff = np.abs(diffs).max()
 bins = np.linspace(-maxdiff, maxdiff, 21)
 plt.figure()
@@ -332,10 +330,16 @@ plt.axvline(diffs.mean(), color = "k", zorder = 10)
 plt.xlim(-maxdiff, maxdiff)
 plt.show()
 
-greedy_R = eval(pis1, loc, rews, adjacency, greedy = True)
+#% how does the greedy policy change
+Rg1 = eval(pis1, loc, rews, adjacency, greedy = True)
 print(diffs.mean(), diffs.std()/np.sqrt(len(diffs)))
-print((greedy_R-Rbase).mean(), (greedy_R-Rbase).std()/np.sqrt(len(Rbase)))
+print((Rg1-Rg0).sum(-1).mean(), (Rg1-Rg0).sum(-1).std()/np.sqrt(len(Rg0)))
 
-#%%
+#% how does the optimal first action change
 
+popt0 = (rnn.optimal_actions * pis0[:, 0, :]).sum(-1)
+popt1 = (rnn.optimal_actions * pis1[:, 0, :]).sum(-1)
 
+print(popt0.mean(), popt1.mean())
+
+# %%

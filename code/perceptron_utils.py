@@ -6,7 +6,7 @@ import time
 import os
 import pickle
 
-basedir = "/Users/kris/Documents/behrens/research/predictive_learning/"
+basedir = "/ceph/behrens/kris/research/predictive_learning/"
 print("loaded")
 
 # first define some helper functions
@@ -48,7 +48,7 @@ def calc_rl_dw_stud(kappa, pR, w_coeff, B, beta):
 
 def calc_rl_dw_teach(kappa, rho, pR, w_coeff):
     angle = np.arccos(rho) # angle between vectors
-    return 0.5*pR*kappa - w_coeff*pR*np.sin(angle)/(pi-angle)
+    return 0.5*pR*kappa - w_coeff*pR*np.sqrt(1 - rho**2)/(pi-angle)
 
 # probability that a single action is good when sampling M sequences and returning a correct one if it exists
 def calc_pc(pg, M, T):

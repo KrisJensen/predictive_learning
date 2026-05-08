@@ -38,11 +38,6 @@
 
 \maketitle
 
-\subsubsection*{Outstanding questions}
-
-Can we look at the signal and noise of the change in correlation instead of the the change in weights?
-I think this is basically just the projection of the weight change onto the teacher.
-
 Can we relax some of the assumptions about the planning process?
 
 \subsection*{Task}
@@ -76,36 +71,37 @@ Our pre-activations are jointly Gaussian with
     \sigma_{**}^2 := \braket{z^* z^*} &= {\b{w}^*}^T \b{w}^*.
 \end{align}
 The correlation between $z$ and $z^*$ is given by $\rho_{|*} := \frac{\sigma_{|*}^2}{\sigma_{**} \sigma_{||}}$.
+Without loss of generality, we will assume that the teacher is normalised such that $\sigma_{**}$ = 1$.
 
-If we sample actions greedily from the student, we can calculate the probability that a single action is correct, $p_g$, as a function of the student-teacher overlap $\rho_{| *}$.
+We can also calculate the probability that a greedy student action is correct, $p_g$, as a function of the student-teacher overlap $\rho$.
 For a zero-mean bivariate Gaussian distribution, the orthant formula tells us that
 \begin{equation}
     p(z >0, z^* > 0) = \frac{1}{4} + \frac{\text{arcsin}(\rho)}{2 \pi}.
 \end{equation}
-This means the probability of the sstudent being correct is
+It follows that
 \begin{align}
     p_g(\rho) &= p(\theta(z) = \theta(z^*))\\
     &= p(z >0, z^* > 0) + p(z < 0, z^* < 0)\\
     &= p(z >0, z^* > 0) + p(z >0, z^* > 0)\\
-    &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}. \label{eq:pg}
+    &= \frac{1}{2} + \frac{\text{arcsin}(\rho)}{\pi}. \label{eq:pg}
 \end{align}
-Importantly, this is independent of any scaling of the weight vectors and depends only on their correlation.
 
-We also remind ourselves that the gradient of the logistic function is given by
+We remind ourselves that the gradient of the logistic function is given by
 \begin{align}
     \frac{d \sigma (z)}{dz} &= \frac{e^{-z}}{(1 + e^{-z})^2}\\
     &= \left ( \frac{1}{1 + e^{-z}} \right ) \left ( \frac{e^{-z}}{1 + e^{-z}} \right ) \\
     &= \sigma(z) (1 - \sigma(z)).
 \end{align}
-Additionally,
+It follows that
 \begin{align}
     \nabla_z \log \pi(y = 1) &= \nabla_z \log \sigma(z)\\
     &= (1 - \sigma (z))\\
     \nabla_z \log \pi (y = -1) &= \nabla_z \log (1 - \sigma(z))\\
     &= - \sigma (z)\\
     \nabla_z \log \pi (y = \tilde{y}) &= 0.5 + 0.5 \tilde{y} - \sigma(z).
+    \label{eq:logsig_grad}
 \end{align}
-At various times, we will approximate the sigmoid as a step function ($\sigma(z) \approx \theta (z)$) or linearise it ($\sigma(z) \approx 0.5 + 0.25 z$) for analytical tractability.
+At various times, we will approximate the sigmoid of the final line as a step function ($\sigma(z) \approx \theta (z)$) or linearise it ($\sigma(z) \approx 0.5 + a z$) for analytical tractability.
 
 We also note a few integrals that will prove useful later.
 For $x \sim \mathcal{N}(0, 1)$:
@@ -125,83 +121,62 @@ We can also evaluate similar integrals conditional on agreement between the teac
     &= \frac{\hat{\b{v}} + \hat{\b{u}}}{ \sqrt{ 1 + \rho} } \sqrt{ \pi} \frac{\sin (\frac{\pi - \theta}{2}) }{\pi - \theta}\\
     &:= \kappa ( \hat{\b{v}} + \hat{\b{u}} ).
 \end{align}
-The first line follows from noting that the $y = y^*$ condition is only satisfied for two cones with identical expectations, each of width $\pi - \theta$.
+The first line follows from noting that $y = y^*$ condition is only satisfied for two cones with identical expectations, each of width $\pi - \theta$.
 Within each cone, the vectors average out to the bisection, and the projection of a vector onto this line has magnitude $r \cos \phi$.
 We integrate this projection over the area of interest.
-We can similarly derive
+Similarly,
 \begin{align}
     \label{eq:conditonal_lin}
     \braket{(\hat{\b{v}}^T \b{x}) \b{x} | \text{sgn}(\b{v}^T \b{x})= \text{sgn}(\b{u}^T \b{x})} &= \hat{\b{v}} + \frac{\sin (\theta) }{\pi - \theta} \hat{\b{u}}\\
     &= \hat{\b{v}} + \frac{ \sqrt{1-\rho^2} }{\pi - \theta} \hat{\b{u}}.
 \end{align}
 
+
 \subsection*{Self-supervised learning}
 
-We first consider the learning dynamics when doing supervised learning on training targets specified by an internal `planner' that takes the form of a simple sequence sampler and evaluator.
+We first consider the learning dynamics when doing supervised learning on training targets specified by an internal `planner' consisting of a simple sequence sampler and an exact evaluator.
 We will learn from a target action $\tilde{y}$ via the following loss function:
 \begin{equation}
     \mathcal{L}(\b{w}) := \mathbb{E}_{ \{ \b{x}_t \sim p(\b{x}_t) \} } \left [ T^{-1} \sum_t \log \pi_t (y_t = \tilde{y}_t) \right ].
 \end{equation}
-Our gradient steps take the form
+With a batch size of $L$ episodes, a weight update takes the form
 \begin{align}
-    \nabla_{\b{w}} \mathcal{L}(\b{w}) &= T^{-1} \sum_t \nabla_{\b{w}} \log \pi_t (y_t = \tilde{y}_t) \\
-    &= T^{-1} \sum_t (0.5-\sigma(z_t)+0.5 \tilde{y}_t) \b{x}_t.
+    \nabla_{\b{w}} \mathcal{L}(\b{w}) &= \frac{L T} \sum_{l=1, t=1}^{L, T} \nabla_{\b{w}} \log \pi_{lt} (y_{lt} = \tilde{y}_{lt}) \\
+    &\approx \frac{L T} \sum_{l=1, t=1}^{L, T} \nabla_{\b{w}} (0.5-\theta(z_{lt})+0.5 \tilde{y}_{lt}) \b{x}_{lt}.
 \end{align}
-For simplicity, we will approximate $\sigma(z) \approx \theta(z)$, where $\theta(z) = [z > 0]$ is the Heaviside step function.
-Alternatively, we could have linearised $\theta (z)$ (see below).
+where we have approximate $\sigma(z) \approx [z > 0] := \theta(z)$.
 
-Since all inputs and therefore actions are independent, we just consider the expected weight update when learning from a single action sampled from a sequence of $T$ action.
-Given a probability $p_c$ of a target action being correct, we can write down the expected weight update
+I don't know to derive the learning dynamics unless I let $L \rightarrow$ infty, which corresponds to an infinite batch size (this may very well not be reasonable!).
+In this case, the weight update is the mean of an infinite number of random variables, so it is just their expectation.
+Given a probability $p_c$ of a single executed action being correct, we can write down this expectation:
 \begin{align}
-    \braket{\Delta \b{w}} &= \braket{(0.5-\theta(z)+0.5 \tilde{y}) \b{x}} \\
+    \Delta \b{w} &= \braket{(0.5-\theta(z)+0.5 \tilde{y}) \b{x}}_{l, t} \\
     &= 0.5 \braket{\tilde{y} \b{x}} - \braket{\theta(z) \b{x}}\\
-    &= 0.5 p_c \braket{y^* \b{x} | \tilde{y} = y^*} + 0.5 (1-p_c) \braket{ - y^* \b{x} | \tilde{y} \neq y^*} - \beta \hat{\b{w}}\\
-    &\approx 0.5 p_c \braket{y^* \b{x}} + 0.5 (p_c-1) \braket{ y^* \b{x}} - \beta \hat{\b{w}}\\
-    &= (2 p_c - 1) \beta \hat{\b{w}}^* - \beta \hat{\b{w}}.
+    &= 0.5 p_c \braket{y^* \b{x} | \tilde{y} = y^*} + 0.5 (1-p_c) \braket{ - y^* \b{x} | \tilde{y} \neq y^*} - \beta \hat{\b{w}}.
 \end{align}
-Importantly, the penultimate line assumes that $p(\b{x} | \tilde{y}=y^*) = p(\b{x}) = \mathcal{N}(0, \b{I}_N)$.
-For now, we will therefore assume that the planner simply samples correct actions with the same probability as a greedy student (\Cref{eq:pg}).
-However, the actions themselves do not depend on the input $\b{x}$.
-
-The overlap of the weight update with the goal vector is then
+We will now make our first severe assumption, which is that $p(\b{x} | \tilde{y}=y^*) = p(\b{x}) = \mathcal{N}(0, \b{I}_N)$.
+This implies that the errors of the planner are not confined to the same part of state space as the errors of the student!
+In this case, we get
 \begin{align}
-    \braket{ (\Delta \b{w})^T \b{w}^*} &= \beta \left [  (2 p_c - 1) \sigma_{**}^{-1} {\b{w}^*}^T \b{w}^* - \sigma_{||}^{-1} \b{w}^T \b{w}^* \right ] \\ 
-     &= \beta \left [  (2 p_c - 1) \sigma_{**} - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ].
+    \Delta \b{w} & \approx 0.5 p_c \braket{y^* \b{x}} + 0.5 (p_c-1) \braket{ y^* \b{x}} - \beta \hat{\b{w}}\\
+    &= (2 p_c - 1) \beta \hat{\b{w}}^* - \beta \hat{\b{w}}\\
+    &= \alpha_{|} \hat{\b{w}} + \alpha_{*} \hat{\b{w}}^*,\\
+    \alpha_{|} :&= - \beta\\
+    \alpha_* :&= (2 p_c - 1) \beta.
 \end{align}
-The overlap with the student vector is
+The overlap with the student and target vectors are:
 \begin{align}
-    \braket{ (\Delta \b{w})^T \b{w}} &= \beta \left [  (2 p_c - 1) \sigma_{**}^{-1} \b{w}^T \b{w}^* - \sigma_{||}^{-1} \b{w}^T \b{w} \right ] \\ 
-     &= \beta \left [  (2 p_c - 1) \frac{\sigma_{|*}^2}{\sigma_{**}} - \sigma_{||} \right ].
-\end{align}
-The overlap with the difference is
-\begin{align}
-    \braket{ (\b{w}^* - \b{w})^T (\Delta \b{w})} &= \beta \left [  (2 p_c - 1) \sigma_{**} + \sigma_{||} - \frac{\sigma_{|*}^2}{\sigma_{||}} - (2 p_c - 1) \frac{\sigma_{|*}^2}{\sigma_{**}} \right ].
+    \label{eq:overlaps}
+    (\Delta \b{w})^T \b{w} &= \alpha_| \sigma_{||} + \alpha_* \sigma_{|*}^2.\\
+    (\Delta \b{w})^T \b{w}^* &= \alpha_| \sigma_{||}^{-1} \sigma_{|*}^2 + \alpha_*.\\
 \end{align}
 
-We now compute the expected change in the different $\sigma$s when updating $\b{w} \leftarrow \b{w} + \eta \Delta \b{w}$.
-\begin{align}
-    \braket{\Delta \sigma_{**}^2} &= \braket{\Delta ({\b{w}^*}^T \b{w}^*)}\\
-    &= 0,
-\end{align}
-since $\b{w}^*$ is fixed.
-\begin{align}
-    \braket{\Delta \sigma_{|*}^2} &= \braket{\Delta (\b{w}^T \b{w}^*)}\\
-    &= \braket{(\b{w} + \eta \Delta \b{w})^T \b{w}^* - \b{w}^T \b{w}^*}\\
-    &= \eta \braket{(\Delta \b{w})^T \b{w}^*}\\
-    &= \eta \beta \left [  (2 p_c - 1) \sigma_{**} - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ].
-\end{align}
-\begin{align}
-    \braket{\Delta \sigma_{||}^2} &= \braket{\Delta (\b{w}^T \b{w})}\\
-    &= \braket{(\b{w} + \eta \Delta \b{w})^T (\b{w} + \eta \Delta \b{w}) - \b{w}^T \b{w}}\\
-    &= \braket{2 \eta (\Delta \b{w})^T \b{w} + \eta^2 (\Delta \b{w})^T (\Delta \b{w})}\\
-    &\approx 2 \eta \braket{(\Delta \b{w})^T \b{w}}\\
-    &= 2 \eta \beta \left [  (2 p_c - 1) \frac{\sigma_{|*}^2}{\sigma_{**}} - \sigma_{||} \right ],
-\end{align}
-to first order in the learning rate $\eta$.
-
-To write down the full learning dynamics, we also need to compute $p_c$.
-Recall that every simulated action is sampled independently, and that it is correct with probability $p_g$.
-The probability that at least one sampled sequence is entirely correct is given by
+We now proceed to compute $p_c$.
+To do so, we will make our second severe assumptionm which is that all simulated actions are sampled independently, and that they are correct with probability $p_gp = p(\theta(z) = \theta(z^*))$.
+In other words, our sampler is \emph{as good as} the greedy student, but it can magically produce uncorrelated yet equally good samples.
+This overestimates the prboability of sampling a correct sequence, especially when $p_g$ is at intermediate values.
+In any case, we proceed undeterred.
+The probability that at least one sampled sequence is entirely correct is:
 \begin{equation}
     p_R := p( \exists_{i \in [1, 2, \ldots, M]} \; \text{s.t.} \; \tilde{y}_{it} = {y_t^*} \; \forall_t) = 1 - (1 - p_g^T)^M.
 \end{equation}
@@ -210,8 +185,7 @@ The probability that no sampled sequences are entirely correct is $(1 - p_g^T)^M
 In this case a random sequence sampled from the set of `not entirely correct' sequences is used as a target.
 The marginal probability of an action being correct, given that the entire sequence is not, is:
 \begin{align}
-    p_0^* &:= p(y_t = y^* | \text{not all correct})\\
-    &= \frac{p(\text{not all correct}| y_t = y^*) p(y_t = y^*)}{p(\text{not all correct})}\\
+    p(y_t = y^* | \text{not all correct}) &= \frac{p(\text{not all correct}| y_t = y^*) p(y_t = y^*)}{p(\text{not all correct})}\\
     &= \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}.
 \end{align}
 We therefore get
@@ -220,14 +194,34 @@ We therefore get
     p_c = 1 - (1 - p_g^T)^M + (1 - p_g^T)^M \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}.
 \end{equation}
 
-Finally, we can write down the full set of learning dynamics, where we set $\sigma_{**} = 1$ without loss of generality:
+We now compute the change in $\sigma_{||}^2$ and $\sigma_{|*}^2$ when updating the weights with a learning rate $\eta$, $\b{w} \leftarrow \b{w} + \eta \Delta \b{w}$:
+
 \begin{align}
-    \rho_{|*} &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
-    p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}\\
+    \label{eq:corr_change}
+    \Delta \sigma_{|*}^2 &= (\b{w} + \eta \Delta \b{w})^T \b{w}^* - \b{w}^T \b{w}^* \\
+    &= \eta (\Delta \b{w})^T \b{w}^* \\
+    &= \eta \left [ \alpha_| \sigma_{||}^{-1} \sigma_{|*}^2 + \alpha_* \right ]\\
+    &= \eta \beta \left [  (2 p_c - 1) - \rho \right ].
+\end{align}
+
+\begin{align}
+    \label{eq:stud_change}
+    \Delta \sigma_{||}^2 &= \Delta (\b{w}^T \b{w})\\
+    &= (\b{w} + \eta \Delta \b{w})^T (\b{w} + \eta \Delta \b{w}) - \b{w}^T \b{w}\\
+    &= 2 \eta (\Delta \b{w})^T \b{w} + \eta^2 (\Delta \b{w})^T (\Delta \b{w}) \\
+    & 2 \eta \left [ \alpha_| \sigma_{||} + \alpha_* \sigma_{|*}^2 \right ] + \eta^2 \left [ \alpha_|^2 + \alpha_*^2 + 2 \alpha_| \alpha_* \rho \right ] \\
+    &= 2 \eta \beta \left [  (2 p_c - 1) \sigma_{|*}^2 - \sigma_{||} \right ] + \eta^2 \beta^2 \left [  1  + (2p_c - 1)^2 - 2 (2 p_c - 1) \right ].
+\end{align}
+For small learning rates, we can ignore the last term, since $\eta^2 \rightarrow 0$.
+
+Finally, we can write down the full learning dynamics:
+\begin{align}
+    \rho &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
+    p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho)}{\pi}\\
     p_R &= 1 - (1 - p_g^T)^M\\
     p_c &= p_R + (1-p_R) \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}\\
-    \Delta \sigma_{|*}^2 &= \eta \beta \left [  (2 p_c - 1) - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
-    \Delta \sigma_{||}^2 &= 2 \eta \beta \left [  (2 p_c - 1) \sigma_{|*}^2 - \sigma_{||} \right ].
+    \Delta \sigma_{|*}^2 &= \eta \beta \left [  (2 p_c - 1) - \rho \right ]\\
+    \Delta \sigma_{||}^2 &= 2 \eta \beta \left [  (2 p_c - 1) \sigma_{|*}^2 - \sigma_{||} \right ] + \eta^2 \beta^2 \left [  1  + (2p_c - 1)^2 - 2 (2 p_c - 1) \right ].
 \end{align}
 
 \subsubsection*{Supervised learning}
@@ -235,12 +229,9 @@ Finally, we can write down the full set of learning dynamics, where we set $\sig
 We recover supervised learning simply by letting $M \rightarrow \infty$ so $p_c \rightarrow 1$.
 In this case, we have
 \begin{align}
-    p_R &= p_g^T\\
-    \Delta \sigma_{|*}^2 &= \eta \beta \left [  1 - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
+    \Delta \sigma_{|*}^2 &= \eta \beta \left [  1 - \rho \right ]\\
     \Delta \sigma_{||}^2 &= 2 \eta \beta \left [  \sigma_{|*}^2 - \sigma_{||} \right ].
 \end{align}
-Here, $p_R$ still denotes the probability of the agent generating a correct action sequence and getting reward.
-It comes from noting that the supervised learner only produces one sequence in a trial, and every element has to be correct for the sequence to be correct.
 
 \subsubsection*{Reinforcement learning}
 
@@ -250,72 +241,73 @@ The policy gradient is given by:
     \nabla_{\b{w}} \mathcal{L}(\b{w}) = \mathbb{E}_{ \{ \b{x}_t \sim p(\b{x}_t) \} } \left [ T^{-1} \sum_t (R - B) \nabla_{\b{w}} \log \pi_t (y = y_t) \right ],
 \end{equation}
 where $B$ is a baseline.
-In this case, the `scale' of $z$ matters.
-The policy is approximately linear when $z$ has small variance, and it approaches a step function when $z$ has large variance.
-For now, we will use the `normalised' $\hat{z} = \sigma_{||}^{-1} z$.
-A single gradient step thus takes the form
+For now, we will approximate $\sigma(z) = 0.5 + a \sigma_{||}^{-1} z := 0.5 + a \hat{z} $ in \Cref{eq:logsig_grad}.
+With a batch size of $L$ episodes, a single gradient step takes the form
 \begin{align}
-    \Delta \b{w} &= (R - B) (0.5-\sigma(\hat{z})+0.5 y) \b{x},\\
-    \Delta \b{w} &\approx (R - B) (0.5 y - 0.25 \hat{z}) \b{x}.
+    \Delta \b{w} &= \frac{L T} \sum_{l = 1}^L \sum_t (R_l - B) (0.5-\sigma(\hat{z}_{lt})+0.5 y_{lt}) \b{x}_{lt},\\
+    \Delta \b{w} &\approx \frac{L T} \sum_{l = 1}^L \sum_t (R_l - B) (0.5 y_{lt} - a \hat{z}_{lt}) \b{x}_{lt}.
 \end{align}
-where we have linearised $\sigma(\hat{z}) \approx 0.5 + 0.25 \hat{z}$.
-
-We now compute the expected weight update
+Nish's RL perceptron rule is recovered when $a = 0$.
+We let $L \rightarrow$ infty, which corresponds to an infinite batch size (again this may very well not be reasonable!).
+In this case, each gradient step is given by its expectation over time and batches:
 \begin{align}
-    \braket{\Delta \b{w}} &= \braket{(R - B) (0.5 y - 0.25 \hat{z}) \b{x}}\\
-    &= 0.5 \braket{R y \b{x}} - 0.25 \braket{R \hat{z} \b{x}} + 0.25 B \braket{\hat{z} \b{x}} - 0.5 B \braket{y \b{x}}\\
-    &= 0.5 p_R \braket{y \b{x} | y = y^*} - 0.25 p_R \braket{ \hat{z} \b{x} | y = y^*} + 0.25 B \braket{\hat{z} \b{x}} - 0.5 B \braket{y \b{x}}.
+    \braket{\Delta \b{w}} &= \braket{(R - B) (0.5 y - a \hat{z}) \b{x}}_{l, t}\\
+    &= 0.5 \braket{R y \b{x}} - a \braket{R \hat{z} \b{x}} + a B \braket{\hat{z} \b{x}} - 0.5 B \braket{y \b{x}}\\
+    &= 0.5 p_R \braket{y \b{x} | y = y^*} - a p_R \braket{ \hat{z} \b{x} | y = y^*} + a B \braket{\hat{z} \b{x}} - 0.5 B \braket{y \b{x}}.
 \end{align}
-To evaluate the conditional expectations, we will assume that the agent takes greedy actions, $y = \text{sgn}(z)$ (although we still assume a linearised sigmoid in the gradient, which is a bit weird).
+To evaluate the conditional expectations, we assume that the agent takes greedy actions, $y = \text{sgn}(z)$ (although we still assume a linearised sigmoid in the gradient, which is admittedly a bit weird).
 Using \Cref{eq:conditonal_sgn} and \Cref{eq:conditonal_lin}, we get
 \begin{align}
-    \braket{\Delta \b{w}} &= 0.5 \kappa p_R (\hat{\b{w}} + \hat{\b{w}}^*) - 0.25 p_R \left (\hat{\b{w}} + \frac{\sqrt{1-\rho^2} }{\pi - \theta} \hat{\b{w}}^* \right ) + 0.25 B \hat{\b{w}} - B \beta \hat{\b{w}}\\
-    &= \frac{\b{w}}{\sigma_{||}} \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \frac{\b{w}^*}{\sigma_{**}} \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right ).
+    \braket{\Delta \b{w}} &= 0.5 \kappa p_R (\hat{\b{w}} + \hat{\b{w}}^*) - a p_R \left (\hat{\b{w}} + \frac{\sqrt{1-\rho^2} }{\pi - \theta} \hat{\b{w}}^* \right ) + a B \hat{\b{w}} - B \beta \hat{\b{w}}\\
+    &= \alpha_{|} \hat{\b{w}} + \alpha_{*} \hat{\b{w}}^*,\\
+    \alpha_{|} :&= 0.5 p_R \kappa - a p_R  + a B - \beta B\\
+    \alpha_* :&= 0.5 p_R \kappa - a p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta}.
 \end{align}
-The overlap with the student and target vectors are:
+
+We can simply plug this result into \Cref{eq:overlaps}, \Cref{eq:corr_change}, and \Cref{eq:stud_change} to get:
 \begin{align}
-    \braket{ (\Delta \b{w})^T \b{w}^*} &= \frac{\sigma_{|*}^2}{\sigma_{||}} \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \sigma_{**} \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sin (\theta) }{\pi - \theta}  \right ),\\
-    \braket{ (\Delta \b{w})^T \b{w}} &= \sigma_{||} \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \frac{\sigma_{|*}^2}{\sigma_{**}} \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )
-\end{align}
-The full learning dynamics with $\sigma_{**} = 1$ are:
-\begin{align}
-    \rho_{|*} &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
-    p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}\\
+    \rho &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
+    p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho)}{\pi}\\
     p_R &= p_g^T \\
-    \kappa &= \frac{ \sqrt{\pi} }{ \sqrt{ 1 + \rho} } \frac{\sin (\frac{\pi - \theta}{2}) }{ (\pi - \theta) }\\
-    \Delta \sigma_{|*}^2 &= \eta \left [ \frac{\sigma_{|*}^2}{\sigma_{||}} \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta}  \right ) \right ] \\
-    \Delta \sigma_{||}^2 &= 2 \eta \left [ \sigma_{||} \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \sigma_{|*}^2 \left ( 0.5 p_R \kappa - 0.25 p_R \frac{ \sqrt{1-\rho^2} }{\pi - \theta} \right ) \right ].
+    \Delta \sigma_{|*}^2 &= \eta \left ( \alpha_| \sigma_{||}^{-1} \sigma_{|*}^2 + \alpha_* \right ) \\
+    \Delta \sigma_{||}^2 &= 2 \eta \left ( \alpha_| \sigma_{||} + \alpha_* \sigma_{|*}^2 \right ) + \eta^2 (\alpha_|^2 + \alpha_*^2 + 2 \alpha_| \alpha_* \rho).
 \end{align}
 
-\subsubsection*{Correlation changes}
+If we let $a = 0$, we get
+\begin{equation}
+    \Delta \sigma_{|*}^2 &= 0.5 \eta p_g \kappa (1 + \frac{\sigma_{|*}^2}{\sigma_{||}^{-1} }) p_g^{T-1} - \eta \frac{B}{2 \pi} \frac{\sigma_{|*}^2}{\sigma_{||}^{-1} }.
+\end{equation}
+This recovers Nish's equation C25 up to a scaling (I don't know where I lost a factor of 2), with $r_1+r_2 = 1$, $r_2 = B$ and $p_g \kappa = \frac{1}{\sqrt{2 \pi}}$.
+I didn't realise this last equality was true until I simulated it empirically, so clearly I have overcomplicated things somewhere but haven't looked into where yet.
 
-We can also compute the change in correlation as a function of the current correlation for a normalised student+teacher:
+
+
+\subsection*{Orthogonal learning}
+
+In this section, we will assume normalised students and teachers and derive learning rules on the unit sphere.
+We can write the \emph{orthogonal} component of the update as
 \begin{align}
-    \dot{\rho} &= \frac{\rho + \dot{\sigma}^2_{|*}}{\sqrt{1+ \dot{\sigma}^2_{||}}} - \rho\\
-    &\approx (\rho + \dot{\sigma}^2_{|*})(1-0.5 \dot{\sigma}^2_{||}) - \rho\\
-    &\approx \dot{\sigma}^2_{|*} - 0.5 \dot{\sigma}^2_{||},
+    \Delta \b{w}_o &= \Delta \b{w} - (\b{w}^T \Delta \b{w}) \b{w}.
 \end{align}
-to first order in $\eta$.
-We can then write
+Our expected updates all take the form
+\begin{equation}
+    \Delta \b{w} = \alpha_{|} \b{w} + \alpha_{*} \b{w}^*.
+\end{equation}
+The orthogonal component is
 \begin{align}
-    \dot{\rho}_\text{sup} &= \beta ( 1 - \rho^2  )\\
-    \dot{\rho}_\text{pred} &= \beta (2p_c-1)(1  - \rho^2)\\
-    \dot{\rho}_\text{RL} &= \left ( 0.5 p_g^T \kappa - 0.25 p_g^T \frac{\sqrt{1-\rho^2}}{\pi- \theta} \right ) (1 - \rho^2 ).
+    \Delta \b{w}_o &= \alpha_{|} \b{w} + \alpha_{*} \b{w}^* - (\alpha_{|} + \alpha_{*} \rho) \b{w}\\
+    &= \alpha_{*} (\b{w}^* - \rho \b{w}).
 \end{align}
-
-It is reasonably straightforward to both (i) linearise these expressions, and (ii) calculate their maximum.
-If we linearise, we get an exponential curve that explains early learning:
+The change in correlation is given by
 \begin{align}
-    \frac{d \rho}{d t} &\approx a \rho + b\\
-    \int \frac{1}{a \rho + b} d\rho &= \int dt \\
-    \frac{1}{a} \log (a \rho + b) &= t + c\\
-    a \rho + b &= c e^{a t} \\
-    \rho &= \frac{b}{a} e^{at} - \frac{b}{a}\\
-    t(\rho = \lambda) &= \frac{1}{a} \log \left ( 1 + \lambda \frac{a}{b} \right ).
+    \Delta \rho &= (\b{w} + \eta \Delta \b{w}_o)^T \b{w}^* - \b{w}^T \b{w}^*\\
+    &= \eta \Delta \b{w}_o^T \b{w}^*\\
+    &= (\alpha_{*} (\b{w}^* - \rho \b{w}))^T \b{w}^*\\
+    &= \alpha_{*} (1 - \rho^2).
 \end{align}
-
 
 \subsubsection*{Gradient signal and noise}
+
 
 Now let's compute the variance of our gradient estimators.
 We will assume that $N \rightarrow \infty$, so $x_{it}$ is uncorrelated from $z$ and $y$, which neglects terms in $N^{-1}$.
@@ -352,180 +344,36 @@ In the RL case
     &= (p_R + B^2 - 2Bp_R)(\frac{5}{16} - \frac{1}{2}\beta)\\
     &\geq 0.113 p_R(1-p_R).
 \end{align}
+If we allow for a general linearisation $\sigma(z) \approx 0.5 + a z$, we get $p_R (1- p_R) (\frac{1}{4} + a^2 - 2 a \beta)$.
 Conversely, 
 \begin{align}
     \braket{\braket{\Delta w_i}_x^2}_i &= \braket{ \left ( \hat{\b{w}}_i \left ( 0.5 p_R \kappa - 0.25 p_R  + 0.25 B - \beta B \right ) + \hat{\b{w}^*}_i \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right ) \right )^2 }\\
     &= \left ( 0.5 p_R \kappa - \beta p_R \right )^2 + \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 p_R \kappa - \beta p_R \right ) \left ( 0.5 p_R \kappa - 0.25 p_R \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )\\
-    &= p_R^2 \left [ \left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right ) \right ].
+    &= p_R^2 \left [ \left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + 2 \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right ) \right ].
 \end{align}
 Now the scaled signal-to-noise ratio is
 The scaled noise-to-signal ratio is
 \begin{align}
     \gamma &= N^{-1} \frac{\braket{\Delta w_i^2}_{x} - \braket{\braket{\Delta w_i}_x^2}_i}{\braket{\braket{\Delta w_i}_x^2}_i}\\
-    &\approx p_R^{-1} \frac{0.11 (1-p_R)}{\left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )}.
+    &\approx p_R^{-1} \frac{0.11 (1-p_R)}{\left ( 0.5 \kappa - \beta \right )^2 + \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )^2 + 2 \rho \left ( 0.5 \kappa - \beta \right ) \left ( 0.5 \kappa - 0.25 \frac{\sqrt{1-\rho^2} }{\pi - \theta} \right )}.
 \end{align}
 Notably, this scales as $p_R = p_g^T$!
 We therefore see that both supervised and predictive learning have a constant signal-to-noise ratio, while RL is exponentially bad.
 
 
-\subsection*{Orthogonal learning}
-
-In this section, we will assume normalised students and teachers and derive learning rules on the unit sphere.
-We can write the \emph{orthogonal} component of the update as
+The gradient variance is exactly the same as in the non-orthogonal case.
+This is intuitively because the gradients are order 1 times x, but the bit we subtract is multiplied by $\hat{w}$, which has elements of order $N^{-\frac12}$.
+The gradient signal is given by
 \begin{align}
-    \Delta \b{w}_o &= \Delta \b{w} - (\b{w}^T \Delta \b{w}) \b{w}\\
-    \braket{\Delta \b{w}_o} &= \braket{\Delta \b{w}} - \b{w}^T \braket{\Delta \b{w}} \b{w}
-\end{align}
-Our expected updates all take the form
-\begin{equation}
-    \braket{\Delta \b{w}} = \alpha_{|} \hat{\b{w}} + \alpha_{*} \hat{\b{w}}^*.
-\end{equation}
-The orthogonal component is
-\begin{align}
-    \braket{\Delta \b{w}_o} &= \alpha_{|} \hat{\b{w}} + \alpha_{*} \hat{\b{w}}^* - (\alpha_{|} + \alpha_{*} \rho) \hat{\b{w}}\\
-    &= \alpha_{*} (\hat{\b{w}}^* - \rho \hat{\b{w}}).
-\end{align}
-The change in correlation is given by
-\begin{align}
-    \dot{\rho} &\approx \b{w}_*^T \Delta \b{w}_o\\
-    &= \alpha_{*} (1 - \rho^2).
+    \braket{\braket{\Delta w_{oi}}_x^2 }_i &= \braket{ \left ( \alpha_{|} w_i + \alpha_{*} w^*_i - (\alpha_{|} + \alpha_{*} \rho) w_i \right )^2 }_i\\
+    &= \braket{ \left ( \alpha_{|} w_i + \alpha_{*} w^*_i \right )^2  + \left ( (\alpha_{|} + \alpha_{*} \rho) w_i \right )^2 - 2 \left ( \alpha_{|} w_i + \alpha_{*} w^*_i \right ) (\alpha_{|} + \alpha_{*} \rho) w_i }_i\\
+    &= \braket{ \alpha_{|}^2 w_i^2 + \alpha_{*}^2 w^*_i^2 + 2 \alpha_{|} \alpha_{*} w_i w^*_i + (\alpha_{|} + \alpha_{*} \rho)^2 w_i^2 - 2 \alpha_{|}^2 w_i^2 - 2 \alpha_{|} \alpha_{*} \rho w_i^2 - 2 \alpha_{|} \alpha_{*} w_i w_i^* - 2 \alpha_{*}^2 \rho w_i w_i^*}_i\\
+    &= \alpha_{|}^2 + \alpha_{*}^2 + 2 \alpha_{|} \alpha_{*} \rho + \alpha_{|}^2 + \alpha_{*}^2 \rho^2 + 2 \alpha_{|} \alpha_{*} \rho - 2 \alpha_{|}^2 - 2 \alpha_{|} \alpha_{*} \rho - 2 \alpha_{|} \alpha_{*} \rho - 2 \alpha_{*}^2 \rho^2\\
+    &= \alpha_{*}^2 + \alpha_{*}^2 \rho^2 - 2 \alpha_{*}^2 \rho^2\\
+    &= \alpha_{*}^2(1 - \rho^2).
 \end{align}
 
-Empirically, the gradient variance is exactly the same as in the non-orthogonal case.
-However, the gradient signal is smaller.
-This makes some intuitive sense because the gradients are order 1 times x, but the bit we subtract is multiplied by $\hat{w}$, which has elements of order $N^{-\frac12}$.
-
-\newpage
 
 
-
-
-
-
-\subsubsection*{Linearised gradient}
-
-It is also straightforward to derive the `predictive' learning dynamics with $\sigma (z) \approx 0.5 + 0.25 z$.
-\begin{align}
-    \braket{ \Delta \b{w}} &= \braket{(0.5 \tilde{y} -\sigma(\hat{z}) + 0.5) \b{x}}\\
-    &\approx 0.5 \braket{\tilde{y}} - 0.25 \braket{\hat{z} \b{x}}\\
-    &= p_c \beta \hat{\b{w}}^* - (1-p_c)\beta \hat{\b{w}}^* - 0.25 \hat{\b{w}}\\
-    &= (2 p_c - 1) \beta \hat{\b{w}}^* - 0.25 \hat{\b{w}}.
-\end{align}
-
-The learning dynamics are then:
-\begin{align}
-    \Delta \sigma_{|*}^2 &= \eta \left [  \beta (2 p_c - 1) - 0.25 \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
-    \Delta \sigma_{||}^2 &= 2 \eta \left [  \beta (2 p_c - 1) \sigma_{|*}^2 - 0.25 \sigma_{||} \right ].
-\end{align}
-
-With supervised learning, this reduces to
-\begin{align}
-    \Delta \sigma_{|*}^2 &= \eta \left [  \beta - 0.25 \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
-    \Delta \sigma_{||}^2 &= 2 \eta \left [  \beta \sigma_{|*}^2 - 0.25 \sigma_{||} \right ].
-\end{align}
-
-\subsubsection*{Miscellaneous}
-
-When linearising, we could also minimise the expected error
-\begin{align}
-    \mathcal{L} &= \mathbb{E} [(\sigma(z) - (az + 0.5))^2]\\
-    &= \mathbb{E} [(\sigma(z) - az - 0.5)^2]
-\end{align}
-empirically, this gives $a = 0.207$.
-
-\newpage
-
-% Our reinforcement learning update takes the form
-% \begin{equation}
-%     \nabla_{\b{w}} \mathcal{L}(\b{w}) = \mathbb{E}_{ \{ \b{x}_t \sim p(\b{x}_t) \} } \left [ T^{-1} \sum_t (R - B) \nabla_{\b{w}} \log \pi_t (y = y_t) \right ],
-% \end{equation}
-% where $B$ is a baseline.
-% The variance of the parameter update is minimised when the baseline is the expected reward, $B = p_R$, and we will use this for simplicity.
-% As in the supervised case, the probability of producing a correct sequence is simply
-% \begin{equation}
-%     p_R = p_g^T.
-% \end{equation}
-% A single gradient step thus takes the form
-% \begin{align}
-%     \Delta \b{w} &= (R - p_R) (0.5-\sigma(z)+0.5 y) \b{x},\\
-%     \Delta \b{w} &\approx (R - p_R) (0.5 y - 0.25 z) \b{x}.
-% \end{align}
-% where we have again set $\sigma(z) \approx \theta(z)$.
-
-% We will consider three different cases;
-% \begin{align}
-%     \Delta \b{w} | R = 1, y = y^* \ &= (1 - p_R) (0.5 y^* - 0.25 z) \b{x},\\
-%     \Delta \b{w} | R = 0, y = y^* \ &= - p_R (0.5 y^* - 0.25 z) \b{x},\\
-%     \Delta \b{w} | R = 0, y \neq y^* \ &= - p_R (- 0.5 y^* - 0.25 z) \b{x}.
-% \end{align}
-% These happen with probabilities
-% \begin{align}
-%     p(R=1, y = y^*) &= p_R \\
-%     p(R = 0, y = y^*) &= (1-p_R) p_0^*\\
-%     p(R = 0, y \neq y^*) &= (1-p_R) (1 - p_0^*),
-% \end{align}
-% where $p_0^* = p(y_t = y^* | \text{not all correct}) = \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}$ as before.
-
-% To compute the expected weight update, we note that $\theta = \text{cos}^{-1} (\rho)$ and
-% \begin{align}
-%     \mathbb{E} \left [ z | y = y^* \right ] &= \mathbb{E} \left [ \b{w}^T \b{x} | \text{sgn}(\b{w}^T \b{x}) = \text{sgn}( {\b{w}^*}^T \b{x}) \right ] \\
-%     &= \b{w} + \frac{\sin (\theta) }{\pi - \theta} \frac{\sigma_{||}}{\sigma_{**}} \b{w}^*\\
-%     &= \b{w} + \kappa_1 \b{w}^*.
-% \end{align}
-% Conversely,
-% \begin{align}
-%     \mathbb{E} \left [ z | y \neq y^* \right ] &= \b{w} - \frac{\sin (\theta) }{ \theta} \frac{\sigma_{||}}{\sigma_{**}} \b{w}^*\\
-%     &= \b{w} + \kappa_2 \b{w}^*.
-% \end{align}
-% Additionally, 
-% \begin{align}
-%     \mathbb{E} \left [ \text{sgn}(y^*) | y = y^* \right ] &= \sqrt{\frac{2}{\pi}} \frac{1}{2 \cos(\theta/2)} (\hat{\bf{w}} + \hat{\bf{w^*}})\\
-%     &= kappa_3 (\hat{\bf{w}} + \hat{\bf{w^*}})
-% \end{align}
-% and
-% \begin{align}
-%     \mathbb{E} \left [ \text{sgn}(y^*) | y = y^* \right ] &= \sqrt{\frac{2}{\pi}} \frac{1}{2 \sin(\theta/2)} (\hat{\bf{w}} - \hat{\bf{w^*}})\\
-%     &= \kappa_4 (\hat{\bf{w}} - \hat{\bf{w^*}}).
-% \end{align}
-% This allows us to write down the expected weight update
-% \begin{align}
-%     \braket{\Delta \b{w}} &= p_R (1 - pR) (0.5 \kappa_3  - 0.25 \kappa_1) - p_R 
-%     (1-p_R) p_0^* (0.5 \kappa_3  - 0.25 \kappa_1) - pR (1-p_R) (1 - p_0^*) (- 0.5 \kappa_4  - 0.25 \kappa_2)
-% \end{align}
-
-
-% This allows us to write down the expected weight update
-% \begin{align}
-%     \braket{\Delta \b{w}} &= \braket{ ( p_R (0.5-\theta(z)) - p_R (0.5 - \theta (z))) \b{x}} \\
-%     &+ \braket{0.5 y^* (p_R(1-p_R) + (1-p_R)p_0^* (-p_R) + (1-p_R)(1-p_0^*)(-p_R)(-1)) \b{x} }\\
-%     &= \beta \sigma_{**}^{-1} \b{w}^* (p_R-p_R^2 - p_0^*p_R + p_R^2 p_0^* + p_R + p_R^2 p_0^* - p_R^2 - p_R p_0^*)\\
-%     &= \beta \sigma_{**}^{-1} \b{w}^* (2 p_R - 2 p_R^2 - 2 p_R p_0^* + 2 p_R^2 p_0)\\
-%     &= 2 \beta p_R \sigma_{**}^{-1} \b{w}^* (1 + p_R p_0^* - p_R - p_0^*).
-% \end{align}
-% the first line comes from noting that (i) the probabilities of the three options sum to 1, and they each have a term of the form $-p_R (0.5 - \theta (z))$; and (ii) the first case contributes an update $(0.5 - \theta (z))$ with probability $p_R$.
-
-% The overlap with the student and target vectors are:
-% \begin{align}
-%     \braket{ (\Delta \b{w})^T \b{w}^*} &= 2 \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \sigma_{**},\\
-%     \braket{ (\Delta \b{w})^T \b{w}} &= 2 \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \frac{\sigma_{|*}^2}{\sigma_{**}}.
-% \end{align}
-% The full learning dynamics with $\sigma_{**} = 1$ are:
-% \begin{align}
-%     \rho_{|*} &= \frac{\sigma_{|*}^2}{\sigma_{||}}\\
-%     p_g &= \frac{1}{2} + \frac{\text{arcsin}(\rho_{|*})}{\pi}\\
-%     p_R &= p_g^T \\
-%     p_0^* &= \frac{(1 - p_g^{T-1}) p_g}{1 - p_g^T}\\
-%     \Delta \sigma_{|*}^2 &= 2 \eta \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \\
-%     \Delta \sigma_{||}^2 &= 4 \eta \beta p_R (1 + p_R p_0^* - p_R - p_0^*) \sigma_{|*}^2.
-% \end{align}
-
-
-% If we set the baseline to zero instead, we would have
-% \begin{align}
-%     p_R &= p_g^T\\
-%     \braket{\Delta w} &= \beta p_R (\sigma_{**} \b{w}^* - \sigma_{||} \b{w}) \\
-%     \Delta \sigma_{|*}^2 &= \eta \beta p_R \left [  1 - \frac{\sigma_{|*}^2}{\sigma_{||}} \right ]\\
-%     \Delta \sigma_{||}^2 &= 2 \eta \beta p_R \left [  \sigma_{|*}^2 - \sigma_{||} \right ].
-% \end{align}
 
 \end{document}
